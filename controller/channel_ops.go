@@ -64,5 +64,8 @@ func FetchChannelModels(c *gin.Context) {
 		respondError(c, http.StatusBadGateway, "获取失败: "+err.Error())
 		return
 	}
+	if models == nil {
+		models = []string{}
+	}
 	respondData(c, gin.H{"models": models})
 }

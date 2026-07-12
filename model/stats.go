@@ -35,7 +35,9 @@ func GetDailyStats(userId, days int) ([]DailyStat, error) {
 	if userId > 0 {
 		tx = tx.Where("user_id = ?", userId)
 	}
-	var stats []DailyStat
+	// Scan (unlike Find) leaves a nil slice when no rows match, which
+	// would serialize as JSON null and break list handling in the UI.
+	stats := make([]DailyStat, 0)
 	err := tx.Group("day").Order("day asc").Scan(&stats).Error
 	return stats, err
 }
@@ -50,7 +52,7 @@ func GetModelStats(userId, days int) ([]ModelStat, error) {
 	if userId > 0 {
 		tx = tx.Where("user_id = ?", userId)
 	}
-	var stats []ModelStat
+	stats := make([]ModelStat, 0)
 	err := tx.Group("model_name").Order("cost_micros desc").Scan(&stats).Error
 	return stats, err
 }

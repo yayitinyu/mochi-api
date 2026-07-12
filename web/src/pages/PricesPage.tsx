@@ -26,7 +26,7 @@ export function PricesPage() {
   const [busy, setBusy] = useState(false);
 
   async function load() {
-    setPrices(await api.get<ModelPrice[]>('/api/prices'));
+    setPrices((await api.get<ModelPrice[]>('/api/prices')) ?? []);
   }
   useEffect(() => {
     void load().catch(() => toast('error', '加载失败'));

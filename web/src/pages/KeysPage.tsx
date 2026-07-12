@@ -20,7 +20,7 @@ export function KeysPage() {
   const [busy, setBusy] = useState(false);
 
   async function load() {
-    setTokens(await api.get<Token[]>('/api/tokens'));
+    setTokens((await api.get<Token[]>('/api/tokens')) ?? []);
   }
   useEffect(() => {
     void load().catch(() => toast('error', '加载失败'));

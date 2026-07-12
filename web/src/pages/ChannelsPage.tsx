@@ -48,7 +48,7 @@ export function ChannelsPage() {
   const [fetchingModels, setFetchingModels] = useState(false);
 
   async function load() {
-    setChannels(await api.get<Channel[]>('/api/channels'));
+    setChannels((await api.get<Channel[]>('/api/channels')) ?? []);
   }
   useEffect(() => {
     void load().catch(() => toast('error', '加载失败'));
@@ -123,11 +123,12 @@ export function ChannelsPage() {
         api_key: form.api_key,
         channel_id: editing?.id ?? 0,
       });
-      if (res.models.length === 0) {
+      const models = res.models ?? [];
+      if (models.length === 0) {
         toast('error', '上游没有返回任何模型');
       } else {
-        setForm({ ...form, models: res.models.join(', ') });
-        toast('success', `已获取 ${res.models.length} 个模型`);
+        setForm({ ...form, models: models.join(', ') });
+        toast('success', `已获取 ${models.length} 个模型`);
       }
     } catch (err) {
       toast('error', err instanceof ApiError ? err.message : '获取失败');

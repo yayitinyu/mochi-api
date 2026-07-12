@@ -68,8 +68,8 @@ export function DashboardPage() {
     ])
       .then(([s, d, m]) => {
         setSummary(s);
-        setDaily(d);
-        setModels(m);
+        setDaily(d ?? []);
+        setModels(m ?? []);
       })
       .catch(() => toast('error', '加载统计失败'));
   }, []);

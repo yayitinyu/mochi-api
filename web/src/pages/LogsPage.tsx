@@ -26,8 +26,8 @@ export function LogsPage() {
       const params = new URLSearchParams({ page: String(p), page_size: String(PAGE_SIZE) });
       if (model) params.set('model', model);
       const res = await api.get<{ items: LogEntry[]; total: number }>(`/api/logs?${params}`);
-      setLogs(res.items);
-      setTotal(res.total);
+      setLogs(res.items ?? []);
+      setTotal(res.total ?? 0);
     } catch {
       toast('error', '加载失败');
     } finally {

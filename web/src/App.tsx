@@ -1,6 +1,7 @@
 import { Navigate, Route, Routes } from 'react-router-dom';
 import { AuthProvider, useAuth } from './context/AuthContext';
 import { ToastProvider } from './components/Toast';
+import { ErrorBoundary } from './components/ErrorBoundary';
 import { Layout } from './components/Layout';
 import { LoginPage } from './pages/LoginPage';
 import { DashboardPage } from './pages/DashboardPage';
@@ -91,10 +92,12 @@ function Router() {
 
 export function App() {
   return (
-    <AuthProvider>
-      <ToastProvider>
-        <Router />
-      </ToastProvider>
-    </AuthProvider>
+    <ErrorBoundary>
+      <AuthProvider>
+        <ToastProvider>
+          <Router />
+        </ToastProvider>
+      </AuthProvider>
+    </ErrorBoundary>
   );
 }
