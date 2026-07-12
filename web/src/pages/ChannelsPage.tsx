@@ -15,6 +15,7 @@ import { Field, Input, Select } from '../components/Field';
 import { Modal } from '../components/Modal';
 import { StatusBadge } from '../components/Badge';
 import { ModelIcon, ProviderIcon } from '../components/ModelIcon';
+import { CHANNEL_PRESETS } from '../lib/channelPresets';
 import { useToast } from '../components/Toast';
 
 interface Form {
@@ -46,6 +47,7 @@ export function ChannelsPage() {
   const [busy, setBusy] = useState(false);
   const [testingId, setTestingId] = useState(0);
   const [fetchingModels, setFetchingModels] = useState(false);
+  const [preset, setPreset] = useState('custom');
 
   async function load() {
     setChannels((await api.get<Channel[]>('/api/channels')) ?? []);
@@ -57,12 +59,27 @@ export function ChannelsPage() {
   function openCreate() {
     setEditing(null);
     setForm(empty);
+    setPreset('custom');
     setOpen(true);
   }
   function openEdit(ch: Channel) {
     setEditing(ch);
     setForm({ ...ch, api_key: '' });
+    setPreset('custom');
     setOpen(true);
+  }
+
+  function applyPreset(id: string) {
+    setPreset(id);
+    const p = CHANNEL_PRESETS.find((x) => x.id === id);
+    if (!p || p.id === 'custom') return;
+    setForm((f) => ({
+      ...f,
+      // Keep an already-typed custom name, otherwise fill the preset label.
+      name: f.name && f.name !== '' ? f.name : p.label,
+      type: p.type,
+      base_url: p.baseUrl,
+    }));
   }
 
   async function save(e: React.FormEvent) {
@@ -157,6 +174,7 @@ export function ChannelsPage() {
             <p className="text-sm text-ink-soft">添加一个 OpenAI 或 Anthropic 兼容的上游即可开始转发</p>
           </div>
         ) : (
+          <div className="overflow-x-auto">
           <table className="w-full text-sm">
             <thead>
               <tr className="text-left text-xs font-bold text-ink-soft">
@@ -178,7 +196,7 @@ export function ChannelsPage() {
                   <td className="px-4 py-3.5">
                     <span className="inline-flex items-center gap-1.5 rounded-full bg-sky/15 px-2.5 py-0.5 text-xs font-bold text-sky">
                       <ProviderIcon type={ch.type} size={13} />
-                      {ch.type === 'anthropic' ? 'Anthropic' : 'OpenAI'}
+                      {ch.type === 'anthropic' ? 'Anthropic' : ch.type === 'gemini' ? 'Gemini' : 'OpenAI'}
                     </span>
                   </td>
                   <td className="max-w-[16rem] px-4 py-3.5">
@@ -236,11 +254,23 @@ export function ChannelsPage() {
               ))}
             </tbody>
           </table>
+          </div>
         )}
       </Card>
 
       <Modal open={open} onClose={() => setOpen(false)} title={editing ? '编辑渠道' : '新建渠道'}>
         <form onSubmit={save} className="flex flex-col gap-4">
+          {!editing && (
+            <Field label="官方渠道" hint="选择后自动填入类型与 Base URL，只需再粘贴 API Key">
+              <Select value={preset} onChange={(e) => applyPreset(e.target.value)}>
+                {CHANNEL_PRESETS.map((p) => (
+                  <option key={p.id} value={p.id}>
+                    {p.label}
+                  </option>
+                ))}
+              </Select>
+            </Field>
+          )}
           <Field label="名称">
             <Input value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} required />
           </Field>
@@ -249,6 +279,7 @@ export function ChannelsPage() {
               <Select value={form.type} onChange={(e) => setForm({ ...form, type: e.target.value })}>
                 <option value="openai">OpenAI 兼容</option>
                 <option value="anthropic">Anthropic 兼容</option>
+                <option value="gemini">Google Gemini</option>
               </Select>
             </Field>
             <Field label="优先级" hint="数值越大越优先">
@@ -259,7 +290,14 @@ export function ChannelsPage() {
               />
             </Field>
           </div>
-          <Field label="Base URL" hint="例如 https://api.openai.com，不含 /v1 路径">
+          <Field
+            label="Base URL"
+            hint={
+              form.type === 'gemini'
+                ? '例如 https://generativelanguage.googleapis.com，不含 /v1beta 路径'
+                : '例如 https://api.openai.com，不含 /v1 路径'
+            }
+          >
             <Input
               value={form.base_url}
               onChange={(e) => setForm({ ...form, base_url: e.target.value })}
@@ -272,7 +310,7 @@ export function ChannelsPage() {
               type="password"
               value={form.api_key}
               onChange={(e) => setForm({ ...form, api_key: e.target.value })}
-              placeholder={editing ? '••••••••' : 'sk-...'}
+              placeholder={editing ? '••••••••' : form.type === 'gemini' ? 'AIza...' : 'sk-...'}
             />
           </Field>
           <Field label="支持的模型" hint="用英文逗号分隔；也可以点右侧按钮从上游自动获取">

@@ -3,6 +3,7 @@ package relay
 import (
 	"bufio"
 	"bytes"
+	"fmt"
 	"io"
 	"math/rand/v2"
 	"net"
@@ -23,6 +24,7 @@ type Format string
 const (
 	FormatOpenAI Format = "openai"
 	FormatClaude Format = "claude"
+	FormatGemini Format = "gemini"
 )
 
 const defaultAnthropicVersion = "2023-06-01"
@@ -86,9 +88,13 @@ func Handle(c *gin.Context, clientFormat Format) {
 		return
 	}
 	rc.channel = pickChannel(channels)
-	rc.upstreamFormat = FormatOpenAI
-	if rc.channel.Type == model.ChannelTypeAnthropic {
+	switch rc.channel.Type {
+	case model.ChannelTypeAnthropic:
 		rc.upstreamFormat = FormatClaude
+	case model.ChannelTypeGemini:
+		rc.upstreamFormat = FormatGemini
+	default:
+		rc.upstreamFormat = FormatOpenAI
 	}
 
 	upstreamBody, err := prepareUpstreamBody(rc, body)
@@ -125,10 +131,19 @@ func Handle(c *gin.Context, clientFormat Format) {
 	recordRelayLog(rc, u, http.StatusOK)
 }
 
-// prepareUpstreamBody converts the body across formats when needed and
-// injects stream_options.include_usage for streaming OpenAI upstreams.
+// prepareUpstreamBody converts the request body to the upstream's format.
+// OpenAI is used as the intermediate format for Gemini conversions.
 func prepareUpstreamBody(rc *relayContext, body []byte) ([]byte, error) {
 	var err error
+	if rc.upstreamFormat == FormatGemini {
+		// Normalize to OpenAI first, then OpenAI -> Gemini.
+		if rc.clientFormat == FormatClaude {
+			if body, err = convertRequestClaudeToOpenAI(body); err != nil {
+				return nil, err
+			}
+		}
+		return convertRequestOpenAIToGemini(body)
+	}
 	if rc.clientFormat != rc.upstreamFormat {
 		if rc.upstreamFormat == FormatClaude {
 			body, err = convertRequestOpenAIToClaude(body)
@@ -149,40 +164,59 @@ func prepareUpstreamBody(rc *relayContext, body []byte) ([]byte, error) {
 }
 
 func sendUpstream(rc *relayContext, body []byte) (*http.Response, error) {
-	path := "/v1/chat/completions"
-	if rc.upstreamFormat == FormatClaude {
-		path = "/v1/messages"
-	}
+	url, headerKey, headerVal := upstreamTarget(rc)
 	req, err := http.NewRequestWithContext(rc.c.Request.Context(), http.MethodPost,
-		rc.channel.BaseURL+path, bytes.NewReader(body))
+		url, bytes.NewReader(body))
 	if err != nil {
 		return nil, err
 	}
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Accept", rc.c.Request.Header.Get("Accept"))
+	req.Header.Set(headerKey, headerVal)
 	if rc.upstreamFormat == FormatClaude {
-		req.Header.Set("x-api-key", rc.channel.ApiKey)
 		version := rc.c.Request.Header.Get("anthropic-version")
 		if version == "" {
 			version = defaultAnthropicVersion
 		}
 		req.Header.Set("anthropic-version", version)
-	} else {
-		req.Header.Set("Authorization", "Bearer "+rc.channel.ApiKey)
 	}
 	return httpClient.Do(req)
 }
 
-func dispatchStream(rc *relayContext, resp *http.Response) usage {
-	switch {
-	case rc.clientFormat == FormatOpenAI && rc.upstreamFormat == FormatOpenAI:
-		return streamOpenAIToOpenAI(rc, resp)
-	case rc.clientFormat == FormatClaude && rc.upstreamFormat == FormatClaude:
-		return streamClaudeToClaude(rc, resp)
-	case rc.clientFormat == FormatOpenAI && rc.upstreamFormat == FormatClaude:
-		return streamClaudeToOpenAI(rc, resp)
+// upstreamTarget returns the request URL and auth header for the channel.
+func upstreamTarget(rc *relayContext) (url, headerKey, headerVal string) {
+	switch rc.upstreamFormat {
+	case FormatClaude:
+		return rc.channel.BaseURL + "/v1/messages", "x-api-key", rc.channel.ApiKey
+	case FormatGemini:
+		action := "generateContent"
+		if rc.stream {
+			action = "streamGenerateContent?alt=sse"
+		}
+		url = fmt.Sprintf("%s/v1beta/models/%s:%s", rc.channel.BaseURL, rc.modelName, action)
+		return url, "x-goog-api-key", rc.channel.ApiKey
 	default:
-		return streamOpenAIToClaude(rc, resp)
+		return rc.channel.BaseURL + "/v1/chat/completions", "Authorization", "Bearer " + rc.channel.ApiKey
+	}
+}
+
+func dispatchStream(rc *relayContext, resp *http.Response) usage {
+	switch rc.upstreamFormat {
+	case FormatGemini:
+		if rc.clientFormat == FormatClaude {
+			return streamGeminiToClaude(rc, resp)
+		}
+		return streamGeminiToOpenAI(rc, resp)
+	case FormatClaude:
+		if rc.clientFormat == FormatClaude {
+			return streamClaudeToClaude(rc, resp)
+		}
+		return streamClaudeToOpenAI(rc, resp)
+	default: // OpenAI upstream
+		if rc.clientFormat == FormatClaude {
+			return streamOpenAIToClaude(rc, resp)
+		}
+		return streamOpenAIToOpenAI(rc, resp)
 	}
 }
 
@@ -193,6 +227,24 @@ func dispatchNonStream(rc *relayContext, resp *http.Response) usage {
 		return usage{}
 	}
 	u := extractUsage(body, rc.upstreamFormat)
+
+	// Convert Gemini upstream to the OpenAI intermediate first.
+	if rc.upstreamFormat == FormatGemini {
+		body, err = convertResponseGeminiToOpenAI(body, rc.modelName)
+		if err != nil {
+			writeError(rc.c, rc.clientFormat, http.StatusBadGateway, "api_error", "响应转换失败")
+			return u
+		}
+		if rc.clientFormat == FormatClaude {
+			if body, err = convertResponseOpenAIToClaude(body); err != nil {
+				writeError(rc.c, rc.clientFormat, http.StatusBadGateway, "api_error", "响应转换失败")
+				return u
+			}
+		}
+		rc.c.Data(http.StatusOK, "application/json", body)
+		return u
+	}
+
 	if rc.clientFormat != rc.upstreamFormat {
 		var converted []byte
 		if rc.clientFormat == FormatOpenAI {
@@ -213,7 +265,8 @@ func dispatchNonStream(rc *relayContext, resp *http.Response) usage {
 // extractUsage reads token usage from a non-stream response body.
 // Claude cache tokens are folded into prompt tokens as an approximation.
 func extractUsage(body []byte, format Format) usage {
-	if format == FormatClaude {
+	switch format {
+	case FormatClaude:
 		u := gjson.GetBytes(body, "usage")
 		return usage{
 			prompt: int(u.Get("input_tokens").Int() +
@@ -221,11 +274,18 @@ func extractUsage(body []byte, format Format) usage {
 				u.Get("cache_read_input_tokens").Int()),
 			completion: int(u.Get("output_tokens").Int()),
 		}
-	}
-	u := gjson.GetBytes(body, "usage")
-	return usage{
-		prompt:     int(u.Get("prompt_tokens").Int()),
-		completion: int(u.Get("completion_tokens").Int()),
+	case FormatGemini:
+		u := gjson.GetBytes(body, "usageMetadata")
+		return usage{
+			prompt:     int(u.Get("promptTokenCount").Int()),
+			completion: int(u.Get("candidatesTokenCount").Int()),
+		}
+	default:
+		u := gjson.GetBytes(body, "usage")
+		return usage{
+			prompt:     int(u.Get("prompt_tokens").Int()),
+			completion: int(u.Get("completion_tokens").Int()),
+		}
 	}
 }
 

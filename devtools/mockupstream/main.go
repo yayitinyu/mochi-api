@@ -7,14 +7,56 @@ import (
 	"fmt"
 	"log"
 	"net/http"
+	"strings"
 )
 
 func main() {
 	http.HandleFunc("/v1/chat/completions", handleOpenAI)
 	http.HandleFunc("/v1/messages", handleClaude)
 	http.HandleFunc("/v1/models", handleModels)
+	http.HandleFunc("/v1beta/models", handleGeminiModels)
+	http.HandleFunc("/v1beta/models/", handleGemini) // :generateContent / :streamGenerateContent
 	log.Println("mock upstream listening on :9100")
 	log.Fatal(http.ListenAndServe(":9100", nil))
+}
+
+func handleGeminiModels(w http.ResponseWriter, r *http.Request) {
+	if r.Header.Get("x-goog-api-key") == "" {
+		w.WriteHeader(http.StatusUnauthorized)
+		writeJSON(w, map[string]any{"error": map[string]any{"message": "missing key"}})
+		return
+	}
+	writeJSON(w, map[string]any{
+		"models": []any{
+			map[string]any{"name": "models/gemini-2.0-flash", "supportedGenerationMethods": []any{"generateContent"}},
+			map[string]any{"name": "models/gemini-1.5-pro", "supportedGenerationMethods": []any{"generateContent"}},
+			map[string]any{"name": "models/embedding-001", "supportedGenerationMethods": []any{"embedContent"}},
+		},
+	})
+}
+
+func handleGemini(w http.ResponseWriter, r *http.Request) {
+	if r.Header.Get("x-goog-api-key") == "" {
+		w.WriteHeader(http.StatusUnauthorized)
+		writeJSON(w, map[string]any{"error": map[string]any{"message": "missing key"}})
+		return
+	}
+	stream := strings.Contains(r.URL.Path, "streamGenerateContent") || r.URL.RawQuery == "alt=sse"
+	if !stream {
+		writeJSON(w, map[string]any{
+			"candidates": []any{map[string]any{
+				"content":      map[string]any{"role": "model", "parts": []any{map[string]any{"text": "안녕하세요，我是 Gemini mock！"}}},
+				"finishReason": "STOP",
+			}},
+			"usageMetadata": map[string]any{"promptTokenCount": 15, "candidatesTokenCount": 9, "totalTokenCount": 24},
+		})
+		return
+	}
+	sse(w,
+		`data: {"candidates":[{"content":{"role":"model","parts":[{"text":"안녕하세요，"}]}}],"usageMetadata":{"promptTokenCount":15,"candidatesTokenCount":2}}`+"\n\n",
+		`data: {"candidates":[{"content":{"role":"model","parts":[{"text":"Gemini mock 입니다！"}]}}],"usageMetadata":{"promptTokenCount":15,"candidatesTokenCount":9}}`+"\n\n",
+		`data: {"candidates":[{"content":{"role":"model","parts":[{"text":""}]},"finishReason":"STOP"}],"usageMetadata":{"promptTokenCount":15,"candidatesTokenCount":9,"totalTokenCount":24}}`+"\n\n",
+	)
 }
 
 func handleModels(w http.ResponseWriter, r *http.Request) {

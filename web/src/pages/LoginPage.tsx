@@ -5,6 +5,7 @@ import type { User } from '../lib/types';
 import { useAuth } from '../context/AuthContext';
 import { Button } from '../components/Button';
 import { Field, Input } from '../components/Field';
+import { Logo } from '../components/Logo';
 
 export function LoginPage() {
   const { setUser } = useAuth();
@@ -35,9 +36,7 @@ export function LoginPage() {
     <div className="grid min-h-[100dvh] place-items-center p-4">
       <div className="w-full max-w-sm">
         <div className="mb-6 text-center">
-          <div className="mx-auto mb-3 grid h-16 w-16 place-items-center rounded-[1.5rem] bg-sakura-400 text-3xl shadow-lg shadow-sakura-200">
-            🌸
-          </div>
+          <Logo size={64} className="mx-auto mb-3 drop-shadow-lg" />
           <h1 className="text-2xl font-extrabold text-ink">Mochi</h1>
           <p className="text-sm text-ink-soft">柔软又可靠的 API 聚合网关</p>
         </div>

@@ -28,8 +28,9 @@ func (req *channelRequest) validate() string {
 	if req.Name == "" {
 		return "名称不能为空"
 	}
-	if req.Type != model.ChannelTypeOpenAI && req.Type != model.ChannelTypeAnthropic {
-		return "类型必须是 openai 或 anthropic"
+	if req.Type != model.ChannelTypeOpenAI && req.Type != model.ChannelTypeAnthropic &&
+		req.Type != model.ChannelTypeGemini {
+		return "类型必须是 openai、anthropic 或 gemini"
 	}
 	if !strings.HasPrefix(req.BaseURL, "http://") && !strings.HasPrefix(req.BaseURL, "https://") {
 		return "Base URL 必须以 http:// 或 https:// 开头"

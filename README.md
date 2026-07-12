@@ -5,14 +5,14 @@
 ## 功能
 
 - **API 聚合转发**：OpenAI 格式（`/v1/chat/completions`）与 Claude 原生格式（`/v1/messages`），均支持 SSE 流式
-- **跨格式互转**：用 OpenAI 格式调 Claude 渠道，或反过来，都可以
+- **跨格式互转**：OpenAI、Claude、Gemini 三种上游任意互调——用 OpenAI 或 Claude 格式的客户端都能调到 Gemini 模型，反之亦然
 - **账号系统**：注册 / 登录（cookie 会话 + bcrypt），首位注册用户自动成为管理员
 - **API 密钥管理**：创建、启停、删除，密钥完整值仅创建时展示一次
-- **渠道管理**：连通性测试、一键从上游拉取模型列表（`GET /v1/models`）
+- **渠道管理**：官方渠道模板一键预填、连通性测试、一键从上游拉取模型列表
 - **自定义模型价格**：按每百万 token 的输入 / 输出价配置，支持 `claude-3-5*` 前缀通配
 - **调用日志**：记录模型、token 数、费用、耗时、状态码
 - **使用统计**：GitHub 风格贡献热力图 + 近 30 天费用趋势 + 模型用量排行
-- **可爱 UI**：樱花粉彩主题，深色 / 浅色模式切换（跟随系统，可手动切换），各 AI 厂商官方图标（[@lobehub/icons](https://github.com/lobehub/lobe-icons)）
+- **可爱 UI**：樱花粉彩主题、原创樱花 SVG 标志、深色 / 浅色模式切换、移动端适配、各 AI 厂商官方图标（[@lobehub/icons](https://github.com/lobehub/lobe-icons)）
 
 > 计费为**仅统计花费**模式：只计算并记录每次调用的美元花费，不做余额扣费 / 充值。
 
@@ -76,9 +76,10 @@ cd web && npm run dev
 
 在「渠道管理」中添加上游：
 
-- **类型**：OpenAI 兼容 或 Anthropic 兼容
-- **Base URL**：如 `https://api.openai.com`（不含 `/v1` 路径）
-- **模型**：逗号分隔的模型名列表
+- **官方渠道**：下拉选择 OpenAI / Anthropic / Gemini / DeepSeek / Kimi / Grok / 通义 / 智谱 / SiliconFlow / OpenRouter，自动填好类型和 Base URL，只需再粘贴 Key
+- **类型**：OpenAI 兼容、Anthropic 兼容 或 Google Gemini
+- **Base URL**：如 `https://api.openai.com`（不含 `/v1` 路径）；Gemini 用 `https://generativelanguage.googleapis.com`
+- **模型**：逗号分隔的模型名列表，或点「获取模型」从上游自动拉取
 - **优先级**：数值越大越优先，同级随机
 
-之后用创建的 `sk-` 密钥即可调用，`Authorization: Bearer sk-xxx` 与 `x-api-key: sk-xxx` 两种方式都支持。
+之后用创建的 `sk-` 密钥即可调用，`Authorization: Bearer sk-xxx` 与 `x-api-key: sk-xxx` 两种方式都支持。Gemini 渠道会自动在 OpenAI / Claude 格式与 Gemini 原生格式之间转换。

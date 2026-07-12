@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"strings"
 	"time"
 
 	"github.com/tidwall/gjson"
@@ -11,19 +12,26 @@ import (
 	"mochi-api/model"
 )
 
-// ListUpstreamModels calls GET {baseURL}/v1/models on an upstream channel.
-// Both OpenAI and Anthropic expose this endpoint with a data[].id shape.
-// It doubles as the connectivity test: a 200 response means the base URL
-// and API key are valid.
+// ListUpstreamModels lists the models an upstream channel serves. It doubles
+// as the connectivity test: a 200 response means the base URL and API key
+// are valid. OpenAI/Anthropic use GET /v1/models (data[].id); Gemini uses
+// GET /v1beta/models (models[].name, prefixed with "models/").
 func ListUpstreamModels(chType, baseURL, apiKey string) ([]string, time.Duration, error) {
-	req, err := http.NewRequest(http.MethodGet, baseURL+"/v1/models", nil)
+	url := baseURL + "/v1/models"
+	if chType == model.ChannelTypeGemini {
+		url = baseURL + "/v1beta/models"
+	}
+	req, err := http.NewRequest(http.MethodGet, url, nil)
 	if err != nil {
 		return nil, 0, err
 	}
-	if chType == model.ChannelTypeAnthropic {
+	switch chType {
+	case model.ChannelTypeAnthropic:
 		req.Header.Set("x-api-key", apiKey)
 		req.Header.Set("anthropic-version", defaultAnthropicVersion)
-	} else {
+	case model.ChannelTypeGemini:
+		req.Header.Set("x-goog-api-key", apiKey)
+	default:
 		req.Header.Set("Authorization", "Bearer "+apiKey)
 	}
 
@@ -50,6 +58,24 @@ func ListUpstreamModels(chType, baseURL, apiKey string) ([]string, time.Duration
 	}
 
 	var models []string
+	if chType == model.ChannelTypeGemini {
+		for _, item := range gjson.GetBytes(body, "models").Array() {
+			// Gemini returns names like "models/gemini-1.5-pro".
+			name := strings.TrimPrefix(item.Get("name").String(), "models/")
+			// Keep only models that support text generation.
+			supported := false
+			for _, m := range item.Get("supportedGenerationMethods").Array() {
+				if m.String() == "generateContent" {
+					supported = true
+					break
+				}
+			}
+			if name != "" && supported {
+				models = append(models, name)
+			}
+		}
+		return models, latency, nil
+	}
 	for _, item := range gjson.GetBytes(body, "data").Array() {
 		if id := item.Get("id").String(); id != "" {
 			models = append(models, id)

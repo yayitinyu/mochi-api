@@ -57,9 +57,10 @@ export function ModelIcon({ name, size = 16 }: { name: string; size?: number }) 
   );
 }
 
-// Channel type -> provider icon (openai | anthropic).
+// Channel type -> provider icon (openai | anthropic | gemini).
 export function ProviderIcon({ type, size = 16 }: { type: string; size?: number }) {
-  const IconCmp: IconComponent = type === 'anthropic' ? Anthropic : OpenAI;
+  const IconCmp: IconComponent =
+    type === 'anthropic' ? Anthropic : type === 'gemini' ? Gemini.Color : OpenAI;
   return (
     <span className="inline-flex shrink-0 items-center" aria-hidden>
       <IconCmp size={size} />

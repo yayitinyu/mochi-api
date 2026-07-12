@@ -13,6 +13,7 @@ import {
 } from '@phosphor-icons/react';
 import { useAuth } from '../context/AuthContext';
 import { isDark, toggleTheme } from '../lib/theme';
+import { Logo } from './Logo';
 
 interface NavItem {
   to: string;
@@ -29,7 +30,7 @@ const items: NavItem[] = [
   { to: '/prices', label: '模型价格', icon: TagIcon, adminOnly: true },
 ];
 
-export function Sidebar() {
+export function Sidebar({ onNavigate }: { onNavigate?: () => void }) {
   const { user, isAdmin, logout } = useAuth();
   const navigate = useNavigate();
   const [dark, setDark] = useState(isDark());
@@ -40,11 +41,9 @@ export function Sidebar() {
   }
 
   return (
-    <aside className="flex w-60 shrink-0 flex-col gap-2 p-4">
+    <aside className="flex h-full w-60 shrink-0 flex-col gap-2 p-4">
       <div className="flex items-center gap-2.5 px-3 py-4">
-        <div className="grid h-10 w-10 place-items-center rounded-2xl bg-sakura-400 text-lg shadow-sm shadow-sakura-200 dark:shadow-none">
-          🌸
-        </div>
+        <Logo size={40} className="drop-shadow-sm" />
         <div className="flex-1">
           <div className="text-lg font-extrabold leading-tight text-ink">Mochi</div>
           <div className="text-xs text-ink-soft">API 聚合网关</div>
@@ -66,6 +65,7 @@ export function Sidebar() {
               key={to}
               to={to}
               end={to === '/'}
+              onClick={onNavigate}
               className={({ isActive }) =>
                 `flex items-center gap-3 rounded-2xl px-3.5 py-2.5 text-sm font-bold transition ${
                   isActive

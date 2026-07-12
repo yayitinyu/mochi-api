@@ -95,6 +95,7 @@ export function PricesPage() {
             <p className="text-sm text-ink-soft">未设置价格的模型，其调用费用会记为 $0</p>
           </div>
         ) : (
+          <div className="overflow-x-auto">
           <table className="w-full text-sm">
             <thead>
               <tr className="text-left text-xs font-bold text-ink-soft">
@@ -139,6 +140,7 @@ export function PricesPage() {
               ))}
             </tbody>
           </table>
+          </div>
         )}
       </Card>
 

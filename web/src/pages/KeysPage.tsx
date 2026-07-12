@@ -90,6 +90,7 @@ export function KeysPage() {
             </Button>
           </div>
         ) : (
+          <div className="overflow-x-auto">
           <table className="w-full text-sm">
             <thead>
               <tr className="text-left text-xs font-bold text-ink-soft">
@@ -128,6 +129,7 @@ export function KeysPage() {
               ))}
             </tbody>
           </table>
+          </div>
         )}
       </Card>
 

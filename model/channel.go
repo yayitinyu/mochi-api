@@ -5,6 +5,7 @@ import "strings"
 const (
 	ChannelTypeOpenAI    = "openai"
 	ChannelTypeAnthropic = "anthropic"
+	ChannelTypeGemini    = "gemini"
 )
 
 type Channel struct {
