@@ -22,6 +22,33 @@ import { Heatmap } from '../components/Heatmap';
 import { ModelIcon } from '../components/ModelIcon';
 import { useToast } from '../components/Toast';
 
+interface TrendPoint {
+  day: string;
+  label: string;
+  cost: number;
+  tokens: number;
+}
+
+function UsageTooltip({
+  active,
+  payload,
+  label,
+}: {
+  active?: boolean;
+  payload?: ReadonlyArray<{ payload: TrendPoint }>;
+  label?: string;
+}) {
+  const point = payload?.[0]?.payload;
+  if (!active || !point) return null;
+  return (
+    <div className="rounded-2xl border border-sakura-200 bg-surface px-3 py-2 text-xs shadow-lg">
+      <div className="mb-1 font-bold text-ink-soft">{label}</div>
+      <div className="font-mono font-bold text-ink">{formatNumber(point.tokens)} tokens</div>
+      <div className="mt-0.5 text-ink-soft">费用 {formatCost(Math.round(point.cost * 1_000_000))}</div>
+    </div>
+  );
+}
+
 function StatCard({
   icon: IconCmp,
   tint,
@@ -45,10 +72,11 @@ function StatCard({
         </div>
         <span className="text-sm font-bold text-ink-soft">{label}</span>
       </div>
-      <div className="text-3xl font-extrabold text-ink">{formatCost(cost)}</div>
+      <div className="text-3xl font-extrabold text-ink">{formatNumber(tokens)}</div>
+      <div className="-mt-2 text-xs font-extrabold uppercase tracking-wide text-ink-soft">Tokens</div>
       <div className="flex gap-4 text-xs font-bold text-ink-soft">
         <span>{formatNumber(requests)} 次请求</span>
-        <span>{formatNumber(tokens)} tokens</span>
+        <span>费用 {formatCost(cost)}</span>
       </div>
     </Card>
   );
@@ -77,7 +105,7 @@ export function DashboardPage() {
   // Last 30 days trend, filled to a continuous series.
   const trend = (() => {
     const byDay = new Map(daily.map((s) => [s.day, s]));
-    const out: { day: string; label: string; cost: number; tokens: number }[] = [];
+    const out: TrendPoint[] = [];
     const today = new Date();
     today.setHours(0, 0, 0, 0);
     for (let i = 29; i >= 0; i--) {
@@ -96,7 +124,8 @@ export function DashboardPage() {
     return out;
   })();
 
-  const maxModelCost = Math.max(1, ...models.map((m) => m.cost_micros));
+  const modelTokens = (model: ModelStat) => model.prompt_tokens + model.completion_tokens;
+  const maxModelTokens = Math.max(1, ...models.map(modelTokens));
 
   return (
     <div className="flex flex-col gap-5">
@@ -128,17 +157,17 @@ export function DashboardPage() {
       </div>
 
       <Card>
-        <h2 className="mb-4 text-base font-extrabold text-ink">过去一年的调用热力图</h2>
+        <h2 className="mb-4 text-base font-extrabold text-ink">过去一年的 Token 热力图</h2>
         <Heatmap stats={daily} />
       </Card>
 
       <div className="grid grid-cols-1 gap-5 lg:grid-cols-5">
         <Card className="lg:col-span-3">
-          <h2 className="mb-4 text-base font-extrabold text-ink">近 30 天费用趋势</h2>
+          <h2 className="mb-4 text-base font-extrabold text-ink">近 30 天 Token 趋势</h2>
           <ResponsiveContainer width="100%" height={240}>
             <AreaChart data={trend} margin={{ top: 4, right: 8, left: -8, bottom: 0 }}>
               <defs>
-                <linearGradient id="costFill" x1="0" y1="0" x2="0" y2="1">
+                <linearGradient id="tokenFill" x1="0" y1="0" x2="0" y2="1">
                   <stop offset="0%" stopColor="#f95d92" stopOpacity={0.35} />
                   <stop offset="100%" stopColor="#f95d92" stopOpacity={0} />
                 </linearGradient>
@@ -155,27 +184,16 @@ export function DashboardPage() {
                 tick={{ fontSize: 11, fill: '#9a8b93' }}
                 tickLine={false}
                 axisLine={false}
-                width={48}
-                tickFormatter={(v) => '$' + v}
+                width={56}
+                tickFormatter={(v) => new Intl.NumberFormat('en-US', { notation: 'compact' }).format(v)}
               />
-              <Tooltip
-                contentStyle={{
-                  borderRadius: 16,
-                  border: '1px solid rgba(249,93,146,0.25)',
-                  backgroundColor: 'var(--color-surface)',
-                  color: 'var(--color-ink)',
-                  fontSize: 12,
-                  fontWeight: 700,
-                }}
-                formatter={(v: number) => ['$' + v.toFixed(4), '费用']}
-                labelFormatter={(l) => `${l}`}
-              />
+              <Tooltip content={<UsageTooltip />} />
               <Area
                 type="monotone"
-                dataKey="cost"
+                dataKey="tokens"
                 stroke="#f95d92"
                 strokeWidth={2.5}
-                fill="url(#costFill)"
+                fill="url(#tokenFill)"
               />
             </AreaChart>
           </ResponsiveContainer>
@@ -194,12 +212,15 @@ export function DashboardPage() {
                       <ModelIcon name={m.model_name} size={15} />
                       {m.model_name}
                     </span>
-                    <span className="font-mono text-xs text-ink-soft">{formatCost(m.cost_micros)}</span>
+                    <span className="text-right font-mono text-xs">
+                      <span className="block font-bold text-ink">{formatNumber(modelTokens(m))} tokens</span>
+                      <span className="block text-[10px] text-ink-soft">{formatCost(m.cost_micros)}</span>
+                    </span>
                   </div>
                   <div className="h-2 overflow-hidden rounded-full bg-sakura-50 dark:bg-sakura-500/10">
                     <div
                       className="h-full rounded-full bg-sakura-400"
-                      style={{ width: `${Math.max(4, (m.cost_micros / maxModelCost) * 100)}%` }}
+                      style={{ width: `${Math.max(4, (modelTokens(m) / maxModelTokens) * 100)}%` }}
                     />
                   </div>
                 </div>

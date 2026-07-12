@@ -11,13 +11,33 @@ import (
 // SetRelayRouter wires up the OpenAI/Claude-compatible relay under /v1.
 func SetRelayRouter(r *gin.Engine) {
 	v1 := r.Group("/v1")
+	v1.Use(relayCORS())
+	v1.OPTIONS("/*path", func(c *gin.Context) {
+		c.Status(204)
+	})
 	v1.GET("/models", middleware.TokenAuth(false), controller.ListRelayModels)
 	v1.POST("/chat/completions", middleware.TokenAuth(false), func(c *gin.Context) {
 		relay.Handle(c, relay.FormatOpenAI)
 	})
+	v1.POST("/responses", middleware.TokenAuth(false), func(c *gin.Context) {
+		relay.Handle(c, relay.FormatResponses)
+	})
 	v1.POST("/messages", middleware.TokenAuth(true), func(c *gin.Context) {
 		relay.Handle(c, relay.FormatClaude)
 	})
+}
+
+// relayCORS allows browser/WebView-based API clients (including Chatbox's
+// direct mode) to call the token-authenticated /v1 endpoints. Dashboard
+// session endpoints deliberately remain outside this policy.
+func relayCORS() gin.HandlerFunc {
+	return func(c *gin.Context) {
+		c.Header("Access-Control-Allow-Origin", "*")
+		c.Header("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
+		c.Header("Access-Control-Allow-Headers", "Authorization, Content-Type, Accept, x-api-key, anthropic-version, OpenAI-Beta")
+		c.Header("Access-Control-Expose-Headers", "Content-Type, X-Request-Id")
+		c.Next()
+	}
 }
 
 // SetApiRouter wires up the dashboard API under /api.

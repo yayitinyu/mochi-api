@@ -90,14 +90,14 @@ export function LogsPage() {
             <table className="w-full text-sm">
               <thead>
                 <tr className="text-left text-xs font-bold text-ink-soft">
-                  <th className="px-6 py-4">时间</th>
-                  <th className="px-4 py-4">模型</th>
-                  <th className="px-4 py-4">密钥</th>
-                  <th className="px-4 py-4 text-right">输入</th>
-                  <th className="px-4 py-4 text-right">输出</th>
-                  <th className="px-4 py-4 text-right">费用</th>
-                  <th className="px-4 py-4 text-right">耗时</th>
-                  <th className="px-6 py-4 text-center">状态</th>
+                  <th className="px-6 py-4 whitespace-nowrap">时间</th>
+                  <th className="px-4 py-4 whitespace-nowrap">模型</th>
+                  <th className="px-4 py-4 whitespace-nowrap">密钥</th>
+                  <th className="px-4 py-4 text-right whitespace-nowrap">输入</th>
+                  <th className="px-4 py-4 text-right whitespace-nowrap">输出</th>
+                  <th className="px-4 py-4 text-right whitespace-nowrap">费用</th>
+                  <th className="px-4 py-4 text-right whitespace-nowrap">耗时</th>
+                  <th className="px-6 py-4 text-center whitespace-nowrap">状态</th>
                 </tr>
               </thead>
               <tbody>

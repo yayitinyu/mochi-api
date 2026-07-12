@@ -11,11 +11,11 @@ import { useToast } from '../components/Toast';
 
 interface Form {
   model: string;
-  input_price: number;
-  output_price: number;
+  input_price: number | '';
+  output_price: number | '';
 }
 
-const empty: Form = { model: '', input_price: 0, output_price: 0 };
+const empty: Form = { model: '', input_price: '', output_price: '' };
 
 export function PricesPage() {
   const toast = useToast();
@@ -45,13 +45,22 @@ export function PricesPage() {
 
   async function save(e: React.FormEvent) {
     e.preventDefault();
+    if (form.input_price === '' || form.output_price === '') {
+      toast('error', '请填写输入价和输出价');
+      return;
+    }
+    const payload = {
+      ...form,
+      input_price: Number(form.input_price),
+      output_price: Number(form.output_price),
+    };
     setBusy(true);
     try {
       if (editing) {
-        await api.put(`/api/prices/${editing.id}`, form);
+        await api.put(`/api/prices/${editing.id}`, payload);
         toast('success', '已更新');
       } else {
-        await api.post('/api/prices', form);
+        await api.post('/api/prices', payload);
         toast('success', '已创建');
       }
       setOpen(false);
@@ -99,10 +108,10 @@ export function PricesPage() {
           <table className="w-full text-sm">
             <thead>
               <tr className="text-left text-xs font-bold text-ink-soft">
-                <th className="px-6 py-4">模型</th>
-                <th className="px-4 py-4">输入价 / 1M</th>
-                <th className="px-4 py-4">输出价 / 1M</th>
-                <th className="px-6 py-4 text-right">操作</th>
+                <th className="px-6 py-4 whitespace-nowrap">模型</th>
+                <th className="px-4 py-4 whitespace-nowrap">输入价 / 1M</th>
+                <th className="px-4 py-4 whitespace-nowrap">输出价 / 1M</th>
+                <th className="px-6 py-4 text-right whitespace-nowrap">操作</th>
               </tr>
             </thead>
             <tbody>
@@ -161,7 +170,9 @@ export function PricesPage() {
                 step="any"
                 min="0"
                 value={form.input_price}
-                onChange={(e) => setForm({ ...form, input_price: Number(e.target.value) })}
+                onChange={(e) =>
+                  setForm({ ...form, input_price: e.target.value === '' ? '' : Number(e.target.value) })
+                }
                 required
               />
             </Field>
@@ -171,7 +182,9 @@ export function PricesPage() {
                 step="any"
                 min="0"
                 value={form.output_price}
-                onChange={(e) => setForm({ ...form, output_price: Number(e.target.value) })}
+                onChange={(e) =>
+                  setForm({ ...form, output_price: e.target.value === '' ? '' : Number(e.target.value) })
+                }
                 required
               />
             </Field>

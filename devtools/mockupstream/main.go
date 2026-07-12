@@ -12,12 +12,52 @@ import (
 
 func main() {
 	http.HandleFunc("/v1/chat/completions", handleOpenAI)
+	http.HandleFunc("/v1/responses", handleResponses)
 	http.HandleFunc("/v1/messages", handleClaude)
 	http.HandleFunc("/v1/models", handleModels)
 	http.HandleFunc("/v1beta/models", handleGeminiModels)
 	http.HandleFunc("/v1beta/models/", handleGemini) // :generateContent / :streamGenerateContent
 	log.Println("mock upstream listening on :9100")
 	log.Fatal(http.ListenAndServe(":9100", nil))
+}
+
+func handleResponses(w http.ResponseWriter, r *http.Request) {
+	body := readBody(r)
+	model, _ := body["model"].(string)
+	stream, _ := body["stream"].(bool)
+	response := map[string]any{
+		"id": "resp_mock123", "object": "response", "created_at": 1700000000,
+		"status": "completed", "model": model,
+		"output": []any{map[string]any{
+			"id": "msg_mock123", "type": "message", "status": "completed", "role": "assistant",
+			"content": []any{map[string]any{"type": "output_text", "text": "你好，我是 Responses mock！", "annotations": []any{}}},
+		}},
+		"usage": map[string]any{"input_tokens": 12, "output_tokens": 8, "total_tokens": 20},
+	}
+	if !stream {
+		writeJSON(w, response)
+		return
+	}
+	response["status"] = "in_progress"
+	response["output"] = []any{}
+	response["usage"] = nil
+	created, _ := json.Marshal(map[string]any{"type": "response.created", "response": response})
+	delta, _ := json.Marshal(map[string]any{
+		"type": "response.output_text.delta", "item_id": "msg_mock123", "output_index": 0,
+		"content_index": 0, "delta": "你好，我是 Responses mock！",
+	})
+	response["status"] = "completed"
+	response["output"] = []any{map[string]any{
+		"id": "msg_mock123", "type": "message", "status": "completed", "role": "assistant",
+		"content": []any{map[string]any{"type": "output_text", "text": "你好，我是 Responses mock！", "annotations": []any{}}},
+	}}
+	response["usage"] = map[string]any{"input_tokens": 12, "output_tokens": 8, "total_tokens": 20}
+	completed, _ := json.Marshal(map[string]any{"type": "response.completed", "response": response})
+	sse(w,
+		"event: response.created\ndata: "+string(created)+"\n\n",
+		"event: response.output_text.delta\ndata: "+string(delta)+"\n\n",
+		"event: response.completed\ndata: "+string(completed)+"\n\n",
+	)
 }
 
 func handleGeminiModels(w http.ResponseWriter, r *http.Request) {
@@ -45,17 +85,20 @@ func handleGemini(w http.ResponseWriter, r *http.Request) {
 	if !stream {
 		writeJSON(w, map[string]any{
 			"candidates": []any{map[string]any{
-				"content":      map[string]any{"role": "model", "parts": []any{map[string]any{"text": "안녕하세요，我是 Gemini mock！"}}},
+				"content": map[string]any{"role": "model", "parts": []any{
+					map[string]any{"thought": true, "text": "先确认语言和回答目标。", "thoughtSignature": "mock-thought-signature"},
+					map[string]any{"text": "안녕하세요，我是 Gemini mock！"},
+				}},
 				"finishReason": "STOP",
 			}},
-			"usageMetadata": map[string]any{"promptTokenCount": 15, "candidatesTokenCount": 9, "totalTokenCount": 24},
+			"usageMetadata": map[string]any{"promptTokenCount": 15, "candidatesTokenCount": 9, "thoughtsTokenCount": 4, "totalTokenCount": 28},
 		})
 		return
 	}
 	sse(w,
-		`data: {"candidates":[{"content":{"role":"model","parts":[{"text":"안녕하세요，"}]}}],"usageMetadata":{"promptTokenCount":15,"candidatesTokenCount":2}}`+"\n\n",
-		`data: {"candidates":[{"content":{"role":"model","parts":[{"text":"Gemini mock 입니다！"}]}}],"usageMetadata":{"promptTokenCount":15,"candidatesTokenCount":9}}`+"\n\n",
-		`data: {"candidates":[{"content":{"role":"model","parts":[{"text":""}]},"finishReason":"STOP"}],"usageMetadata":{"promptTokenCount":15,"candidatesTokenCount":9,"totalTokenCount":24}}`+"\n\n",
+		`data: {"candidates":[{"content":{"role":"model","parts":[{"thought":true,"text":"先确认语言和回答目标。","thoughtSignature":"mock-thought-signature"}]}}],"usageMetadata":{"promptTokenCount":15,"candidatesTokenCount":0,"thoughtsTokenCount":4}}`+"\n\n",
+		`data: {"candidates":[{"content":{"role":"model","parts":[{"text":"안녕하세요，Gemini mock 입니다！"}]}}],"usageMetadata":{"promptTokenCount":15,"candidatesTokenCount":9,"thoughtsTokenCount":4}}`+"\n\n",
+		`data: {"candidates":[{"content":{"role":"model","parts":[{"text":""}]},"finishReason":"STOP"}],"usageMetadata":{"promptTokenCount":15,"candidatesTokenCount":9,"thoughtsTokenCount":4,"totalTokenCount":28}}`+"\n\n",
 	)
 }
 
@@ -105,8 +148,8 @@ func handleOpenAI(w http.ResponseWriter, r *http.Request) {
 			"id": "chatcmpl-mock123", "object": "chat.completion", "created": 1700000000,
 			"model": model,
 			"choices": []any{map[string]any{
-				"index": 0,
-				"message": map[string]any{"role": "assistant", "content": "你好，我是 mock 助手！"},
+				"index":         0,
+				"message":       map[string]any{"role": "assistant", "content": "你好，我是 mock 助手！"},
 				"finish_reason": "stop",
 			}},
 			"usage": map[string]any{"prompt_tokens": 19, "completion_tokens": 7, "total_tokens": 26},

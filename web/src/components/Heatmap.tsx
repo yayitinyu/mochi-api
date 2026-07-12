@@ -3,7 +3,7 @@ import type { DailyStat } from '../lib/types';
 import { formatCost, formatNumber } from '../lib/format';
 
 // GitHub-style contribution heatmap: 7 rows (Mon-Sun) x ~53 week columns,
-// colored by daily request count on a 5-step sakura scale.
+// colored by daily token usage on a 5-step sakura scale.
 
 const LEVEL_CLASSES = [
   'bg-sakura-500/10', // 0 requests
@@ -26,10 +26,9 @@ function formatDay(d: Date): string {
   return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
 }
 
-function levelFor(requests: number, max: number): number {
-  if (requests <= 0) return 0;
-  if (max <= 4) return Math.min(requests, 4);
-  const ratio = requests / max;
+function levelFor(tokens: number, max: number): number {
+  if (tokens <= 0) return 0;
+  const ratio = tokens / max;
   if (ratio <= 0.25) return 1;
   if (ratio <= 0.5) return 2;
   if (ratio <= 0.75) return 3;
@@ -39,7 +38,7 @@ function levelFor(requests: number, max: number): number {
 export function Heatmap({ stats }: { stats: DailyStat[] }) {
   const [hover, setHover] = useState<Cell | null>(null);
 
-  const { weeks, maxRequests } = useMemo(() => {
+  const { weeks, maxTokens } = useMemo(() => {
     const byDay = new Map(stats.map((s) => [s.day, s]));
     const today = new Date();
     today.setHours(0, 0, 0, 0);
@@ -64,8 +63,8 @@ export function Heatmap({ stats }: { stats: DailyStat[] }) {
       }
       weeks.push(week);
     }
-    const maxRequests = Math.max(0, ...stats.map((s) => s.requests));
-    return { weeks, maxRequests };
+    const maxTokens = Math.max(0, ...stats.map((s) => s.prompt_tokens + s.completion_tokens));
+    return { weeks, maxTokens };
   }, [stats]);
 
   // Month label above the first week column that starts a new month.
@@ -101,7 +100,12 @@ export function Heatmap({ stats }: { stats: DailyStat[] }) {
                     onMouseEnter={() => setHover(cell)}
                     onMouseLeave={() => setHover(null)}
                     className={`h-3 w-3 rounded-[4px] transition hover:ring-2 hover:ring-sakura-400 ${
-                      LEVEL_CLASSES[levelFor(cell.stat?.requests ?? 0, maxRequests)]
+                      LEVEL_CLASSES[
+                        levelFor(
+                          (cell.stat?.prompt_tokens ?? 0) + (cell.stat?.completion_tokens ?? 0),
+                          maxTokens,
+                        )
+                      ]
                     }`}
                   />
                 ))}
@@ -115,9 +119,9 @@ export function Heatmap({ stats }: { stats: DailyStat[] }) {
         <div className="h-4 font-bold">
           {hover
             ? hover.stat
-              ? `${hover.day} · ${formatNumber(hover.stat.requests)} 次请求 · ${formatNumber(
+              ? `${hover.day} · ${formatNumber(
                   hover.stat.prompt_tokens + hover.stat.completion_tokens,
-                )} tokens · ${formatCost(hover.stat.cost_micros)}`
+                )} tokens · ${formatNumber(hover.stat.requests)} 次请求 · ${formatCost(hover.stat.cost_micros)}`
               : `${hover.day} · 无调用`
             : '将鼠标悬停在方块上查看当日用量'}
         </div>

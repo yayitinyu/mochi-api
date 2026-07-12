@@ -4,14 +4,15 @@
 
 ## 功能
 
-- **API 聚合转发**：OpenAI 格式（`/v1/chat/completions`）与 Claude 原生格式（`/v1/messages`），均支持 SSE 流式
-- **跨格式互转**：OpenAI、Claude、Gemini 三种上游任意互调——用 OpenAI 或 Claude 格式的客户端都能调到 Gemini 模型，反之亦然
+- **API 聚合转发**：OpenAI Chat Completions（`/v1/chat/completions`）、OpenAI Responses（`/v1/responses`）与 Claude 原生格式（`/v1/messages`），均支持 SSE 流式
+- **跨格式互转**：OpenAI Chat/Responses、Claude、Gemini 三种上游互调；Responses 请求可转换到 Claude / Gemini，OpenAI 兼容渠道则原样转发完整 Responses 参数
+- **推理与工具**：保留 `reasoning`、函数工具和 Responses 内置工具参数；Gemini 渠道支持 thought summary / signature 转换，并将 `web_search` 映射为 Google Search grounding
 - **账号系统**：注册 / 登录（cookie 会话 + bcrypt），首位注册用户自动成为管理员
 - **API 密钥管理**：创建、启停、删除，密钥完整值仅创建时展示一次
 - **渠道管理**：官方渠道模板一键预填、连通性测试、一键从上游拉取模型列表
 - **自定义模型价格**：按每百万 token 的输入 / 输出价配置，支持 `claude-3-5*` 前缀通配
 - **调用日志**：记录模型、token 数、费用、耗时、状态码
-- **使用统计**：GitHub 风格贡献热力图 + 近 30 天费用趋势 + 模型用量排行
+- **使用统计**：以 Tokens 为主单位的 GitHub 风格热力图、近 30 天趋势和模型用量排行，费用作为辅助信息
 - **可爱 UI**：樱花粉彩主题、原创樱花 SVG 标志、深色 / 浅色模式切换、移动端适配、各 AI 厂商官方图标（[@lobehub/icons](https://github.com/lobehub/lobe-icons)）
 
 > 计费为**仅统计花费**模式：只计算并记录每次调用的美元花费，不做余额扣费 / 充值。
@@ -83,3 +84,20 @@ cd web && npm run dev
 - **优先级**：数值越大越优先，同级随机
 
 之后用创建的 `sk-` 密钥即可调用，`Authorization: Bearer sk-xxx` 与 `x-api-key: sk-xxx` 两种方式都支持。Gemini 渠道会自动在 OpenAI / Claude 格式与 Gemini 原生格式之间转换。
+
+### Responses API 示例
+
+```bash
+curl http://localhost:3000/v1/responses \
+  -H "Authorization: Bearer sk-xxx" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "model": "gpt-5",
+    "input": "检索今天的重要 AI 新闻并总结",
+    "reasoning": {"effort": "medium", "summary": "auto"},
+    "tools": [{"type": "web_search"}],
+    "stream": true
+  }'
+```
+
+OpenAI 兼容渠道会把 Responses 请求体原样发往上游的 `/v1/responses`，因此也支持其他上游认可的 Responses 参数。Gemini 渠道会转换常用输入、函数工具、`reasoning` 和 `web_search`；Anthropic 渠道暂不转换 Responses 内置托管工具，并会返回明确错误。浏览器与 WebView 客户端可直接跨域访问 `/v1`，无需借助第三方 CORS 代理。

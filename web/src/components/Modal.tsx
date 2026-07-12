@@ -12,14 +12,14 @@ export function Modal({ open, onClose, title, children }: Props) {
   if (!open) return null;
   return (
     <div
-      className="fixed inset-0 z-50 flex items-center justify-center bg-ink/20 p-4 backdrop-blur-sm"
+      className="fixed inset-0 z-50 flex items-end justify-center bg-ink/20 p-0 backdrop-blur-sm sm:items-center sm:p-4"
       onClick={onClose}
     >
       <div
-        className="w-full max-w-lg rounded-3xl border border-white bg-cream p-6 shadow-2xl dark:border-white/10"
+        className="flex max-h-[92dvh] w-full max-w-lg flex-col overflow-hidden rounded-t-3xl border border-white bg-cream shadow-2xl sm:max-h-[88dvh] sm:rounded-3xl dark:border-white/10"
         onClick={(e) => e.stopPropagation()}
       >
-        <div className="mb-4 flex items-center justify-between">
+        <div className="flex items-center justify-between px-6 pb-3 pt-6">
           <h2 className="text-lg font-extrabold text-ink">{title}</h2>
           <button
             onClick={onClose}
@@ -29,7 +29,7 @@ export function Modal({ open, onClose, title, children }: Props) {
             <XIcon size={20} weight="bold" />
           </button>
         </div>
-        {children}
+        <div className="overflow-y-auto px-6 pb-6">{children}</div>
       </div>
     </div>
   );

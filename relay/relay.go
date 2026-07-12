@@ -22,9 +22,10 @@ import (
 type Format string
 
 const (
-	FormatOpenAI Format = "openai"
-	FormatClaude Format = "claude"
-	FormatGemini Format = "gemini"
+	FormatOpenAI    Format = "openai"
+	FormatResponses Format = "responses"
+	FormatClaude    Format = "claude"
+	FormatGemini    Format = "gemini"
 )
 
 const defaultAnthropicVersion = "2023-06-01"
@@ -57,8 +58,8 @@ type relayContext struct {
 	start            time.Time
 }
 
-// Handle is the shared relay pipeline for /v1/chat/completions (FormatOpenAI)
-// and /v1/messages (FormatClaude).
+// Handle is the shared relay pipeline for OpenAI Chat Completions, OpenAI
+// Responses, and Anthropic Messages compatible endpoints.
 func Handle(c *gin.Context, clientFormat Format) {
 	rc := &relayContext{c: c, clientFormat: clientFormat, start: time.Now()}
 
@@ -94,7 +95,11 @@ func Handle(c *gin.Context, clientFormat Format) {
 	case model.ChannelTypeGemini:
 		rc.upstreamFormat = FormatGemini
 	default:
-		rc.upstreamFormat = FormatOpenAI
+		if clientFormat == FormatResponses {
+			rc.upstreamFormat = FormatResponses
+		} else {
+			rc.upstreamFormat = FormatOpenAI
+		}
 	}
 
 	upstreamBody, err := prepareUpstreamBody(rc, body)
@@ -135,16 +140,30 @@ func Handle(c *gin.Context, clientFormat Format) {
 // OpenAI is used as the intermediate format for Gemini conversions.
 func prepareUpstreamBody(rc *relayContext, body []byte) ([]byte, error) {
 	var err error
+	sourceFormat := rc.clientFormat
+	if sourceFormat == FormatResponses && rc.upstreamFormat != FormatResponses {
+		if gjson.GetBytes(body, "previous_response_id").String() != "" {
+			return nil, fmt.Errorf("当前渠道不支持 previous_response_id，请传入完整 input 历史")
+		}
+		if rc.upstreamFormat == FormatClaude && responsesHasHostedTool(body) {
+			return nil, fmt.Errorf("Anthropic 渠道暂不支持 Responses 内置工具")
+		}
+		body, err = convertRequestResponsesToOpenAIChat(body)
+		if err != nil {
+			return nil, err
+		}
+		sourceFormat = FormatOpenAI
+	}
 	if rc.upstreamFormat == FormatGemini {
 		// Normalize to OpenAI first, then OpenAI -> Gemini.
-		if rc.clientFormat == FormatClaude {
+		if sourceFormat == FormatClaude {
 			if body, err = convertRequestClaudeToOpenAI(body); err != nil {
 				return nil, err
 			}
 		}
 		return convertRequestOpenAIToGemini(body)
 	}
-	if rc.clientFormat != rc.upstreamFormat {
+	if sourceFormat != rc.upstreamFormat {
 		if rc.upstreamFormat == FormatClaude {
 			body, err = convertRequestOpenAIToClaude(body)
 		} else {
@@ -195,6 +214,8 @@ func upstreamTarget(rc *relayContext) (url, headerKey, headerVal string) {
 		}
 		url = fmt.Sprintf("%s/v1beta/models/%s:%s", rc.channel.BaseURL, rc.modelName, action)
 		return url, "x-goog-api-key", rc.channel.ApiKey
+	case FormatResponses:
+		return rc.channel.BaseURL + "/v1/responses", "Authorization", "Bearer " + rc.channel.ApiKey
 	default:
 		return rc.channel.BaseURL + "/v1/chat/completions", "Authorization", "Bearer " + rc.channel.ApiKey
 	}
@@ -203,16 +224,24 @@ func upstreamTarget(rc *relayContext) (url, headerKey, headerVal string) {
 func dispatchStream(rc *relayContext, resp *http.Response) usage {
 	switch rc.upstreamFormat {
 	case FormatGemini:
+		if rc.clientFormat == FormatResponses {
+			return streamGeminiToResponses(rc, resp)
+		}
 		if rc.clientFormat == FormatClaude {
 			return streamGeminiToClaude(rc, resp)
 		}
 		return streamGeminiToOpenAI(rc, resp)
 	case FormatClaude:
+		if rc.clientFormat == FormatResponses {
+			return streamClaudeToResponses(rc, resp)
+		}
 		if rc.clientFormat == FormatClaude {
 			return streamClaudeToClaude(rc, resp)
 		}
 		return streamClaudeToOpenAI(rc, resp)
-	default: // OpenAI upstream
+	case FormatResponses:
+		return streamResponsesToResponses(rc, resp)
+	default: // OpenAI Chat Completions upstream
 		if rc.clientFormat == FormatClaude {
 			return streamOpenAIToClaude(rc, resp)
 		}
@@ -228,7 +257,12 @@ func dispatchNonStream(rc *relayContext, resp *http.Response) usage {
 	}
 	u := extractUsage(body, rc.upstreamFormat)
 
-	// Convert Gemini upstream to the OpenAI intermediate first.
+	if rc.upstreamFormat == FormatResponses {
+		rc.c.Data(http.StatusOK, "application/json", body)
+		return u
+	}
+
+	// Convert Gemini upstream to the OpenAI Chat Completions intermediate first.
 	if rc.upstreamFormat == FormatGemini {
 		body, err = convertResponseGeminiToOpenAI(body, rc.modelName)
 		if err != nil {
@@ -240,12 +274,28 @@ func dispatchNonStream(rc *relayContext, resp *http.Response) usage {
 				writeError(rc.c, rc.clientFormat, http.StatusBadGateway, "api_error", "响应转换失败")
 				return u
 			}
+		} else if rc.clientFormat == FormatResponses {
+			if body, err = convertResponseOpenAIToResponses(body); err != nil {
+				writeError(rc.c, rc.clientFormat, http.StatusBadGateway, "api_error", "响应转换失败")
+				return u
+			}
 		}
 		rc.c.Data(http.StatusOK, "application/json", body)
 		return u
 	}
 
-	if rc.clientFormat != rc.upstreamFormat {
+	if rc.clientFormat == FormatResponses {
+		if rc.upstreamFormat == FormatClaude {
+			body, err = convertResponseClaudeToOpenAI(body)
+			if err == nil {
+				body, err = convertResponseOpenAIToResponses(body)
+			}
+		}
+		if err != nil {
+			writeError(rc.c, rc.clientFormat, http.StatusBadGateway, "api_error", "响应转换失败")
+			return u
+		}
+	} else if rc.clientFormat != rc.upstreamFormat {
 		var converted []byte
 		if rc.clientFormat == FormatOpenAI {
 			converted, err = convertResponseClaudeToOpenAI(body)
@@ -278,8 +328,11 @@ func extractUsage(body []byte, format Format) usage {
 		u := gjson.GetBytes(body, "usageMetadata")
 		return usage{
 			prompt:     int(u.Get("promptTokenCount").Int()),
-			completion: int(u.Get("candidatesTokenCount").Int()),
+			completion: int(u.Get("candidatesTokenCount").Int() + u.Get("thoughtsTokenCount").Int()),
 		}
+	case FormatResponses:
+		u := gjson.GetBytes(body, "usage")
+		return usage{prompt: int(u.Get("input_tokens").Int()), completion: int(u.Get("output_tokens").Int())}
 	default:
 		u := gjson.GetBytes(body, "usage")
 		return usage{
@@ -354,6 +407,24 @@ func estimateTokens(text string) int {
 // collectPromptText concatenates input text for fallback token estimation.
 func collectPromptText(body []byte) string {
 	var sb strings.Builder
+	instructions := gjson.GetBytes(body, "instructions")
+	if instructions.Type == gjson.String {
+		sb.WriteString(instructions.String())
+	}
+	input := gjson.GetBytes(body, "input")
+	if input.Type == gjson.String {
+		sb.WriteString(input.String())
+	} else {
+		for _, item := range input.Array() {
+			content := item.Get("content")
+			if content.Type == gjson.String {
+				sb.WriteString(content.String())
+			}
+			for _, part := range content.Array() {
+				sb.WriteString(part.Get("text").String())
+			}
+		}
+	}
 	system := gjson.GetBytes(body, "system")
 	if system.Type == gjson.String {
 		sb.WriteString(system.String())
@@ -389,7 +460,7 @@ func writeError(c *gin.Context, format Format, status int, errType, message stri
 
 func setSSEHeaders(c *gin.Context) {
 	c.Writer.Header().Set("Content-Type", "text/event-stream")
-	c.Writer.Header().Set("Cache-Control", "no-cache")
+	c.Writer.Header().Set("Cache-Control", "no-cache, no-transform")
 	c.Writer.Header().Set("Connection", "keep-alive")
 	c.Writer.Header().Set("X-Accel-Buffering", "no")
 	c.Writer.WriteHeader(http.StatusOK)

@@ -47,6 +47,9 @@ export function ChannelsPage() {
   const [busy, setBusy] = useState(false);
   const [testingId, setTestingId] = useState(0);
   const [fetchingModels, setFetchingModels] = useState(false);
+  const [availableModels, setAvailableModels] = useState<string[]>([]);
+  const [selectedModels, setSelectedModels] = useState<Set<string>>(new Set());
+  const [modelQuery, setModelQuery] = useState('');
   const [preset, setPreset] = useState('custom');
 
   async function load() {
@@ -60,12 +63,18 @@ export function ChannelsPage() {
     setEditing(null);
     setForm(empty);
     setPreset('custom');
+    setAvailableModels([]);
+    setSelectedModels(new Set());
+    setModelQuery('');
     setOpen(true);
   }
   function openEdit(ch: Channel) {
     setEditing(ch);
     setForm({ ...ch, api_key: '' });
     setPreset('custom');
+    setAvailableModels([]);
+    setSelectedModels(new Set());
+    setModelQuery('');
     setOpen(true);
   }
 
@@ -144,8 +153,10 @@ export function ChannelsPage() {
       if (models.length === 0) {
         toast('error', '上游没有返回任何模型');
       } else {
-        setForm({ ...form, models: models.join(', ') });
-        toast('success', `已获取 ${models.length} 个模型`);
+        setAvailableModels(models);
+        setSelectedModels(new Set(models));
+        setModelQuery('');
+        toast('success', `已获取 ${models.length} 个模型，请勾选要加入的模型`);
       }
     } catch (err) {
       toast('error', err instanceof ApiError ? err.message : '获取失败');
@@ -153,6 +164,31 @@ export function ChannelsPage() {
       setFetchingModels(false);
     }
   }
+
+  function toggleModel(model: string) {
+    setSelectedModels((current) => {
+      const next = new Set(current);
+      if (next.has(model)) next.delete(model);
+      else next.add(model);
+      return next;
+    });
+  }
+
+  function addSelectedModels() {
+    const existing = form.models
+      .split(',')
+      .map((model) => model.trim())
+      .filter(Boolean);
+    const merged = [...new Set([...existing, ...availableModels.filter((model) => selectedModels.has(model))])];
+    setForm((current) => ({ ...current, models: merged.join(', ') }));
+    toast('success', `已加入 ${merged.length - existing.length} 个新模型`);
+    setAvailableModels([]);
+    setSelectedModels(new Set());
+  }
+
+  const visibleModels = availableModels.filter((model) =>
+    model.toLocaleLowerCase().includes(modelQuery.trim().toLocaleLowerCase()),
+  );
 
   return (
     <div className="max-w-5xl">
@@ -178,12 +214,12 @@ export function ChannelsPage() {
           <table className="w-full text-sm">
             <thead>
               <tr className="text-left text-xs font-bold text-ink-soft">
-                <th className="px-6 py-4">名称</th>
-                <th className="px-4 py-4">类型</th>
-                <th className="px-4 py-4">模型</th>
-                <th className="px-4 py-4">优先级</th>
-                <th className="px-4 py-4">状态</th>
-                <th className="px-6 py-4 text-right">操作</th>
+                <th className="px-6 py-4 whitespace-nowrap">名称</th>
+                <th className="px-4 py-4 whitespace-nowrap">类型</th>
+                <th className="px-4 py-4 whitespace-nowrap">模型</th>
+                <th className="px-4 py-4 whitespace-nowrap">优先级</th>
+                <th className="px-4 py-4 whitespace-nowrap">状态</th>
+                <th className="px-6 py-4 text-right whitespace-nowrap">操作</th>
               </tr>
             </thead>
             <tbody>
@@ -259,7 +295,11 @@ export function ChannelsPage() {
       </Card>
 
       <Modal open={open} onClose={() => setOpen(false)} title={editing ? '编辑渠道' : '新建渠道'}>
-        <form onSubmit={save} className="flex flex-col gap-4">
+        <form onSubmit={save} className="flex flex-col gap-4" autoComplete="off">
+          {/* Decoy fields absorb the browser's username/password autofill so it
+              doesn't land in Base URL / API Key. */}
+          <input type="text" name="username" autoComplete="username" className="hidden" tabIndex={-1} aria-hidden />
+          <input type="password" name="password" autoComplete="current-password" className="hidden" tabIndex={-1} aria-hidden />
           {!editing && (
             <Field label="官方渠道" hint="选择后自动填入类型与 Base URL，只需再粘贴 API Key">
               <Select value={preset} onChange={(e) => applyPreset(e.target.value)}>
@@ -302,6 +342,8 @@ export function ChannelsPage() {
               value={form.base_url}
               onChange={(e) => setForm({ ...form, base_url: e.target.value })}
               placeholder="https://api.openai.com"
+              name="channel_base_url"
+              autoComplete="off"
               required
             />
           </Field>
@@ -311,6 +353,8 @@ export function ChannelsPage() {
               value={form.api_key}
               onChange={(e) => setForm({ ...form, api_key: e.target.value })}
               placeholder={editing ? '••••••••' : form.type === 'gemini' ? 'AIza...' : 'sk-...'}
+              name="channel_api_key"
+              autoComplete="new-password"
             />
           </Field>
           <Field label="支持的模型" hint="用英文逗号分隔；也可以点右侧按钮从上游自动获取">
@@ -334,6 +378,65 @@ export function ChannelsPage() {
               </Button>
             </div>
           </Field>
+          {availableModels.length > 0 && (
+            <section className="rounded-2xl border border-sakura-100 bg-sakura-50/60 p-3 dark:border-white/10 dark:bg-sakura-500/5">
+              <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
+                <span className="text-sm font-bold text-ink">选择要加入的模型</span>
+                <div className="flex gap-2 text-xs font-bold">
+                  <button
+                    type="button"
+                    className="text-sakura-600 hover:text-sakura-700 dark:text-sakura-300"
+                    onClick={() => setSelectedModels(new Set(availableModels))}
+                  >
+                    全选
+                  </button>
+                  <button
+                    type="button"
+                    className="text-ink-soft hover:text-ink"
+                    onClick={() => setSelectedModels(new Set())}
+                  >
+                    清空
+                  </button>
+                </div>
+              </div>
+              <Input
+                value={modelQuery}
+                onChange={(event) => setModelQuery(event.target.value)}
+                placeholder="搜索模型"
+                className="mb-2 w-full bg-surface"
+              />
+              <div className="max-h-44 overflow-y-auto rounded-xl bg-surface/70 p-1">
+                {visibleModels.length === 0 ? (
+                  <p className="p-3 text-center text-xs font-bold text-ink-soft">没有匹配的模型</p>
+                ) : (
+                  visibleModels.map((model) => (
+                    <label
+                      key={model}
+                      className="flex cursor-pointer items-center gap-2 rounded-xl px-2.5 py-2 text-sm transition hover:bg-sakura-50 dark:hover:bg-sakura-500/10"
+                    >
+                      <input
+                        type="checkbox"
+                        checked={selectedModels.has(model)}
+                        onChange={() => toggleModel(model)}
+                        className="h-4 w-4 accent-sakura-500"
+                      />
+                      <ModelIcon name={model} size={14} />
+                      <span className="min-w-0 break-all font-mono text-xs text-ink">{model}</span>
+                    </label>
+                  ))
+                )}
+              </div>
+              <Button
+                type="button"
+                variant="soft"
+                className="mt-2 w-full text-xs"
+                disabled={selectedModels.size === 0}
+                onClick={addSelectedModels}
+              >
+                加入已选模型（{selectedModels.size}）
+              </Button>
+            </section>
+          )}
           <Field label="状态">
             <Select
               value={form.status}

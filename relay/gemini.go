@@ -25,6 +25,7 @@ func convertRequestOpenAIToGemini(body []byte) ([]byte, error) {
 
 	var contents []map[string]any
 	var systemParts []map[string]any
+	toolNames := map[string]string{}
 
 	for _, msg := range root.Get("messages").Array() {
 		role := msg.Get("role").String()
@@ -34,31 +35,51 @@ func convertRequestOpenAIToGemini(body []byte) ([]byte, error) {
 				systemParts = append(systemParts, map[string]any{"text": text})
 			}
 		case "tool":
+			name := msg.Get("name").String()
+			if name == "" {
+				name = toolNames[msg.Get("tool_call_id").String()]
+			}
 			contents = append(contents, map[string]any{
 				"role": "user",
 				"parts": []any{map[string]any{
 					"functionResponse": map[string]any{
-						"name":     msg.Get("name").String(),
+						"name":     name,
+						"id":       msg.Get("tool_call_id").String(),
 						"response": map[string]any{"content": contentText(msg.Get("content"))},
 					},
 				}},
 			})
 		case "assistant":
 			var parts []any
+			if reasoning := msg.Get("reasoning_content").String(); reasoning != "" {
+				part := map[string]any{"text": reasoning, "thought": true}
+				if signature := msg.Get("extra_content.google.thought_signature").String(); signature != "" {
+					part["thoughtSignature"] = signature
+				}
+				parts = append(parts, part)
+			}
 			if text := contentText(msg.Get("content")); text != "" {
-				parts = append(parts, map[string]any{"text": text})
+				part := map[string]any{"text": text}
+				if signature := msg.Get("extra_content.google.thought_signature").String(); signature != "" {
+					part["thoughtSignature"] = signature
+				}
+				parts = append(parts, part)
 			}
 			for _, tc := range msg.Get("tool_calls").Array() {
 				var args any = map[string]any{}
 				if s := tc.Get("function.arguments").String(); s != "" {
 					_ = json.Unmarshal([]byte(s), &args)
 				}
-				parts = append(parts, map[string]any{
-					"functionCall": map[string]any{
-						"name": tc.Get("function.name").String(),
-						"args": args,
-					},
-				})
+				functionCall := map[string]any{
+					"name": tc.Get("function.name").String(),
+					"args": args, "id": tc.Get("id").String(),
+				}
+				part := map[string]any{"functionCall": functionCall}
+				if signature := tc.Get("extra_content.google.thought_signature").String(); signature != "" {
+					part["thoughtSignature"] = signature
+				}
+				parts = append(parts, part)
+				toolNames[tc.Get("id").String()] = tc.Get("function.name").String()
 			}
 			if len(parts) > 0 {
 				contents = append(contents, map[string]any{"role": "model", "parts": parts})
@@ -98,14 +119,31 @@ func convertRequestOpenAIToGemini(body []byte) ([]byte, error) {
 			genConfig["stopSequences"] = stops
 		}
 	}
+	modelName := root.Get("model").String()
+	if strings.Contains(modelName, "gemini-2.5") || strings.HasPrefix(modelName, "gemini-3") || root.Get("reasoning").Exists() {
+		thinking := map[string]any{"includeThoughts": true}
+		if effort := root.Get("reasoning.effort").String(); effort != "" {
+			applyGeminiReasoningEffort(thinking, modelName, effort)
+		}
+		genConfig["thinkingConfig"] = thinking
+	}
 	if len(genConfig) > 0 {
 		out["generationConfig"] = genConfig
 	}
 
 	if tools := root.Get("tools").Array(); len(tools) > 0 {
 		var decls []map[string]any
+		var geminiTools []any
 		for _, t := range tools {
+			typeName := t.Get("type").String()
+			if typeName == "web_search" || typeName == "web_search_preview" {
+				geminiTools = append(geminiTools, map[string]any{"googleSearch": map[string]any{}})
+				continue
+			}
 			fn := t.Get("function")
+			if !fn.Exists() {
+				continue
+			}
 			decl := map[string]any{
 				"name":        fn.Get("name").String(),
 				"description": fn.Get("description").String(),
@@ -115,10 +153,66 @@ func convertRequestOpenAIToGemini(body []byte) ([]byte, error) {
 			}
 			decls = append(decls, decl)
 		}
-		out["tools"] = []any{map[string]any{"functionDeclarations": decls}}
+		if len(decls) > 0 {
+			geminiTools = append(geminiTools, map[string]any{"functionDeclarations": decls})
+		}
+		if len(geminiTools) > 0 {
+			out["tools"] = geminiTools
+		}
+	}
+	if choice := root.Get("tool_choice"); choice.Exists() {
+		config := map[string]any{}
+		switch {
+		case choice.Type == gjson.String && choice.String() == "required":
+			config["mode"] = "ANY"
+		case choice.Type == gjson.String && choice.String() == "none":
+			config["mode"] = "NONE"
+		case choice.Get("function.name").String() != "":
+			config["mode"] = "ANY"
+			config["allowedFunctionNames"] = []string{choice.Get("function.name").String()}
+		default:
+			config["mode"] = "AUTO"
+		}
+		out["toolConfig"] = map[string]any{"functionCallingConfig": config}
 	}
 
 	return json.Marshal(out)
+}
+
+func applyGeminiReasoningEffort(config map[string]any, modelName, effort string) {
+	if strings.HasPrefix(modelName, "gemini-3") {
+		level := effort
+		switch effort {
+		case "none", "minimal":
+			level = "minimal"
+		case "xhigh":
+			level = "high"
+		}
+		config["thinkingLevel"] = level
+		return
+	}
+	if strings.Contains(modelName, "gemini-2.5") {
+		budget := -1
+		switch effort {
+		case "none", "minimal":
+			budget = 0
+			if strings.Contains(modelName, "pro") {
+				budget = 128
+			}
+		case "low":
+			budget = 1024
+		case "medium":
+			budget = 8192
+		case "high":
+			budget = 24576
+		case "xhigh":
+			budget = 24576
+			if strings.Contains(modelName, "pro") {
+				budget = 32768
+			}
+		}
+		config["thinkingBudget"] = budget
+	}
 }
 
 func openAIContentToGeminiParts(content gjson.Result) []any {
@@ -165,26 +259,43 @@ func geminiFinishToOpenAI(reason string) string {
 
 // geminiCandidateToOpenAI extracts text and tool calls from a Gemini
 // candidate's content.parts array.
-func geminiCandidateToOpenAI(candidate gjson.Result) (string, []map[string]any) {
+func geminiCandidateToOpenAI(candidate gjson.Result) (string, string, []map[string]any, map[string]any) {
 	var text strings.Builder
+	var reasoning strings.Builder
 	var toolCalls []map[string]any
+	var messageExtra map[string]any
 	for _, part := range candidate.Get("content.parts").Array() {
 		if t := part.Get("text"); t.Exists() {
-			text.WriteString(t.String())
+			if part.Get("thought").Bool() {
+				reasoning.WriteString(t.String())
+			} else {
+				text.WriteString(t.String())
+			}
+			if signature := part.Get("thoughtSignature").String(); signature != "" {
+				messageExtra = map[string]any{"google": map[string]any{"thought_signature": signature}}
+			}
 		}
 		if fc := part.Get("functionCall"); fc.Exists() {
 			args, _ := json.Marshal(fc.Get("args").Value())
-			toolCalls = append(toolCalls, map[string]any{
-				"id":   "call_" + common.GenerateKey(16),
+			callID := fc.Get("id").String()
+			if callID == "" {
+				callID = "call_" + common.GenerateKey(16)
+			}
+			call := map[string]any{
+				"id":   callID,
 				"type": "function",
 				"function": map[string]any{
 					"name":      fc.Get("name").String(),
 					"arguments": string(args),
 				},
-			})
+			}
+			if signature := part.Get("thoughtSignature").String(); signature != "" {
+				call["extra_content"] = map[string]any{"google": map[string]any{"thought_signature": signature}}
+			}
+			toolCalls = append(toolCalls, call)
 		}
 	}
-	return text.String(), toolCalls
+	return text.String(), reasoning.String(), toolCalls, messageExtra
 }
 
 // --- non-stream response: Gemini -> OpenAI ---
@@ -192,15 +303,22 @@ func geminiCandidateToOpenAI(candidate gjson.Result) (string, []map[string]any) 
 func convertResponseGeminiToOpenAI(body []byte, modelName string) ([]byte, error) {
 	root := gjson.ParseBytes(body)
 	candidate := root.Get("candidates.0")
-	text, toolCalls := geminiCandidateToOpenAI(candidate)
+	text, reasoning, toolCalls, messageExtra := geminiCandidateToOpenAI(candidate)
 
 	message := map[string]any{"role": "assistant", "content": text}
+	if reasoning != "" {
+		message["reasoning_content"] = reasoning
+	}
+	if messageExtra != nil {
+		message["extra_content"] = messageExtra
+	}
 	if len(toolCalls) > 0 {
 		message["tool_calls"] = toolCalls
 	}
 	u := root.Get("usageMetadata")
 	prompt := u.Get("promptTokenCount").Int()
-	completion := u.Get("candidatesTokenCount").Int()
+	reasoningTokens := u.Get("thoughtsTokenCount").Int()
+	completion := u.Get("candidatesTokenCount").Int() + reasoningTokens
 	out := map[string]any{
 		"id":      "chatcmpl-" + common.GenerateKey(24),
 		"object":  "chat.completion",
@@ -212,9 +330,10 @@ func convertResponseGeminiToOpenAI(body []byte, modelName string) ([]byte, error
 			"finish_reason": geminiFinishToOpenAI(candidate.Get("finishReason").String()),
 		}},
 		"usage": map[string]any{
-			"prompt_tokens":     prompt,
-			"completion_tokens": completion,
-			"total_tokens":      prompt + completion,
+			"prompt_tokens":             prompt,
+			"completion_tokens":         completion,
+			"total_tokens":              prompt + completion,
+			"completion_tokens_details": map[string]any{"reasoning_tokens": reasoningTokens},
 		},
 	}
 	return json.Marshal(out)
@@ -229,6 +348,7 @@ func streamGeminiToOpenAI(rc *relayContext, resp *http.Response) usage {
 	var u usage
 	firstChunk := true
 	toolIndex := 0
+	reasoningTokens := 0
 
 	scanSSE(resp.Body, func(line string) {
 		payload, ok := strings.CutPrefix(line, "data:")
@@ -238,7 +358,8 @@ func streamGeminiToOpenAI(rc *relayContext, resp *http.Response) usage {
 		event := gjson.Parse(strings.TrimSpace(payload))
 		if um := event.Get("usageMetadata"); um.Exists() {
 			u.prompt = int(um.Get("promptTokenCount").Int())
-			u.completion = int(um.Get("candidatesTokenCount").Int())
+			reasoningTokens = int(um.Get("thoughtsTokenCount").Int())
+			u.completion = int(um.Get("candidatesTokenCount").Int()) + reasoningTokens
 		}
 		candidate := event.Get("candidates.0")
 		if firstChunk {
@@ -248,21 +369,35 @@ func streamGeminiToOpenAI(rc *relayContext, resp *http.Response) usage {
 		}
 		for _, part := range candidate.Get("content.parts").Array() {
 			if t := part.Get("text"); t.Exists() && t.String() != "" {
-				writeOpenAIChunkData(rc, openAIChunk(id, created, rc.modelName,
-					gin.H{"content": t.String()}, nil))
+				field := "content"
+				if part.Get("thought").Bool() {
+					field = "reasoning_content"
+				}
+				delta := gin.H{field: t.String()}
+				if signature := part.Get("thoughtSignature").String(); signature != "" {
+					delta["extra_content"] = gin.H{"google": gin.H{"thought_signature": signature}}
+				}
+				writeOpenAIChunkData(rc, openAIChunk(id, created, rc.modelName, delta, nil))
 			}
 			if fc := part.Get("functionCall"); fc.Exists() {
 				args, _ := json.Marshal(fc.Get("args").Value())
+				callID := fc.Get("id").String()
+				if callID == "" {
+					callID = "call_" + common.GenerateKey(16)
+				}
+				call := gin.H{
+					"index": toolIndex,
+					"id":    callID,
+					"type":  "function",
+					"function": gin.H{
+						"name": fc.Get("name").String(), "arguments": string(args),
+					},
+				}
+				if signature := part.Get("thoughtSignature").String(); signature != "" {
+					call["extra_content"] = gin.H{"google": gin.H{"thought_signature": signature}}
+				}
 				writeOpenAIChunkData(rc, openAIChunk(id, created, rc.modelName, gin.H{
-					"tool_calls": []gin.H{{
-						"index": toolIndex,
-						"id":    "call_" + common.GenerateKey(16),
-						"type":  "function",
-						"function": gin.H{
-							"name":      fc.Get("name").String(),
-							"arguments": string(args),
-						},
-					}},
+					"tool_calls": []gin.H{call},
 				}, nil))
 				toolIndex++
 			}
@@ -282,9 +417,10 @@ func streamGeminiToOpenAI(rc *relayContext, resp *http.Response) usage {
 		chunk := openAIChunk(id, created, rc.modelName, gin.H{}, nil)
 		chunk["choices"] = []gin.H{}
 		chunk["usage"] = gin.H{
-			"prompt_tokens":     u.prompt,
-			"completion_tokens": u.completion,
-			"total_tokens":      u.prompt + u.completion,
+			"prompt_tokens":             u.prompt,
+			"completion_tokens":         u.completion,
+			"total_tokens":              u.prompt + u.completion,
+			"completion_tokens_details": gin.H{"reasoning_tokens": reasoningTokens},
 		}
 		writeOpenAIChunkData(rc, chunk)
 	}
@@ -299,7 +435,10 @@ func streamGeminiToClaude(rc *relayContext, resp *http.Response) usage {
 	msgId := "msg_" + common.GenerateKey(24)
 	var u usage
 	finishReason := ""
-	blockOpen := false
+	blockIndex := -1
+	blockType := ""
+	thinkingSignature := ""
+	hadToolCall := false
 
 	writeClaudeEvent(rc, "message_start", gin.H{
 		"type": "message_start",
@@ -310,6 +449,35 @@ func streamGeminiToClaude(rc *relayContext, resp *http.Response) usage {
 			"usage": gin.H{"input_tokens": 0, "output_tokens": 0},
 		},
 	})
+	closeBlock := func() {
+		if blockType == "" {
+			return
+		}
+		if blockType == "thinking" && thinkingSignature != "" {
+			writeClaudeEvent(rc, "content_block_delta", gin.H{
+				"type": "content_block_delta", "index": blockIndex,
+				"delta": gin.H{"type": "signature_delta", "signature": thinkingSignature},
+			})
+		}
+		writeClaudeEvent(rc, "content_block_stop", gin.H{"type": "content_block_stop", "index": blockIndex})
+		blockType = ""
+		thinkingSignature = ""
+	}
+	openBlock := func(kind string) {
+		if blockType == kind {
+			return
+		}
+		closeBlock()
+		blockIndex++
+		blockType = kind
+		content := gin.H{"type": "text", "text": ""}
+		if kind == "thinking" {
+			content = gin.H{"type": "thinking", "thinking": "", "signature": ""}
+		}
+		writeClaudeEvent(rc, "content_block_start", gin.H{
+			"type": "content_block_start", "index": blockIndex, "content_block": content,
+		})
+	}
 
 	scanSSE(resp.Body, func(line string) {
 		payload, ok := strings.CutPrefix(line, "data:")
@@ -319,37 +487,62 @@ func streamGeminiToClaude(rc *relayContext, resp *http.Response) usage {
 		event := gjson.Parse(strings.TrimSpace(payload))
 		if um := event.Get("usageMetadata"); um.Exists() {
 			u.prompt = int(um.Get("promptTokenCount").Int())
-			u.completion = int(um.Get("candidatesTokenCount").Int())
+			u.completion = int(um.Get("candidatesTokenCount").Int() + um.Get("thoughtsTokenCount").Int())
 		}
 		candidate := event.Get("candidates.0")
 		for _, part := range candidate.Get("content.parts").Array() {
 			text := part.Get("text").String()
-			if text == "" {
+			if part.Get("thought").Bool() {
+				openBlock("thinking")
+				if signature := part.Get("thoughtSignature").String(); signature != "" {
+					thinkingSignature = signature
+				}
+				if text != "" {
+					writeClaudeEvent(rc, "content_block_delta", gin.H{
+						"type": "content_block_delta", "index": blockIndex,
+						"delta": gin.H{"type": "thinking_delta", "thinking": text},
+					})
+				}
 				continue
 			}
-			if !blockOpen {
-				writeClaudeEvent(rc, "content_block_start", gin.H{
-					"type": "content_block_start", "index": 0,
-					"content_block": gin.H{"type": "text", "text": ""},
+			if text != "" {
+				openBlock("text")
+				writeClaudeEvent(rc, "content_block_delta", gin.H{
+					"type": "content_block_delta", "index": blockIndex,
+					"delta": gin.H{"type": "text_delta", "text": text},
 				})
-				blockOpen = true
 			}
-			writeClaudeEvent(rc, "content_block_delta", gin.H{
-				"type": "content_block_delta", "index": 0,
-				"delta": gin.H{"type": "text_delta", "text": text},
-			})
+			if call := part.Get("functionCall"); call.Exists() {
+				closeBlock()
+				blockIndex++
+				hadToolCall = true
+				callID := call.Get("id").String()
+				if callID == "" {
+					callID = "toolu_" + common.GenerateKey(16)
+				}
+				writeClaudeEvent(rc, "content_block_start", gin.H{
+					"type": "content_block_start", "index": blockIndex,
+					"content_block": gin.H{"type": "tool_use", "id": callID, "name": call.Get("name").String(), "input": gin.H{}},
+				})
+				args, _ := json.Marshal(call.Get("args").Value())
+				writeClaudeEvent(rc, "content_block_delta", gin.H{
+					"type": "content_block_delta", "index": blockIndex,
+					"delta": gin.H{"type": "input_json_delta", "partial_json": string(args)},
+				})
+				writeClaudeEvent(rc, "content_block_stop", gin.H{"type": "content_block_stop", "index": blockIndex})
+			}
 		}
 		if fr := candidate.Get("finishReason"); fr.Exists() {
 			finishReason = fr.String()
 		}
 	})
 
-	if blockOpen {
-		writeClaudeEvent(rc, "content_block_stop", gin.H{"type": "content_block_stop", "index": 0})
-	}
+	closeBlock()
 	stopReason := "end_turn"
 	if geminiFinishToOpenAI(finishReason) == "length" {
 		stopReason = "max_tokens"
+	} else if hadToolCall {
+		stopReason = "tool_use"
 	}
 	writeClaudeEvent(rc, "message_delta", gin.H{
 		"type":  "message_delta",

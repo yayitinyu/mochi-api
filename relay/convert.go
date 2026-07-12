@@ -351,7 +351,7 @@ func convertRequestClaudeToOpenAI(body []byte) ([]byte, error) {
 			out["tool_choice"] = "none"
 		case "tool":
 			out["tool_choice"] = map[string]any{
-				"type": "function",
+				"type":     "function",
 				"function": map[string]any{"name": tc.Get("name").String()},
 			}
 		default:
@@ -377,11 +377,18 @@ func claudeSourceToImageURL(source gjson.Result) string {
 func convertResponseClaudeToOpenAI(body []byte) ([]byte, error) {
 	root := gjson.ParseBytes(body)
 	var textParts []string
+	var reasoningParts []string
+	var reasoningSignature string
 	var toolCalls []map[string]any
 	for _, block := range root.Get("content").Array() {
 		switch block.Get("type").String() {
 		case "text":
 			textParts = append(textParts, block.Get("text").String())
+		case "thinking":
+			reasoningParts = append(reasoningParts, block.Get("thinking").String())
+			if signature := block.Get("signature").String(); signature != "" {
+				reasoningSignature = signature
+			}
 		case "tool_use":
 			args, _ := json.Marshal(block.Get("input").Value())
 			toolCalls = append(toolCalls, map[string]any{
@@ -395,6 +402,14 @@ func convertResponseClaudeToOpenAI(body []byte) ([]byte, error) {
 		}
 	}
 	message := map[string]any{"role": "assistant", "content": strings.Join(textParts, "")}
+	if len(reasoningParts) > 0 {
+		message["reasoning_content"] = strings.Join(reasoningParts, "")
+	}
+	if reasoningSignature != "" {
+		message["extra_content"] = map[string]any{
+			"anthropic": map[string]any{"thinking_signature": reasoningSignature},
+		}
+	}
 	if len(toolCalls) > 0 {
 		message["tool_calls"] = toolCalls
 	}
@@ -425,6 +440,15 @@ func convertResponseOpenAIToClaude(body []byte) ([]byte, error) {
 	root := gjson.ParseBytes(body)
 	choice := root.Get("choices.0")
 	var blocks []map[string]any
+	if reasoning := choice.Get("message.reasoning_content").String(); reasoning != "" {
+		block := map[string]any{"type": "thinking", "thinking": reasoning}
+		signature := choice.Get("message.extra_content.google.thought_signature").String()
+		if signature == "" {
+			signature = choice.Get("message.extra_content.anthropic.thinking_signature").String()
+		}
+		block["signature"] = signature
+		blocks = append(blocks, block)
+	}
 	if text := choice.Get("message.content").String(); text != "" {
 		blocks = append(blocks, map[string]any{"type": "text", "text": text})
 	}
@@ -474,6 +498,7 @@ func streamClaudeToOpenAI(rc *relayContext, resp *http.Response) usage {
 	stopReason := ""
 	toolIndex := map[int64]int{} // claude content block index -> openai tool_calls index
 	nextToolIndex := 0
+	thinkingBlocks := map[int64]bool{}
 
 	scanSSE(resp.Body, func(line string) {
 		payload, ok := strings.CutPrefix(line, "data:")
@@ -489,7 +514,9 @@ func streamClaudeToOpenAI(rc *relayContext, resp *http.Response) usage {
 				gin.H{"role": "assistant", "content": ""}, nil))
 		case "content_block_start":
 			block := event.Get("content_block")
-			if block.Get("type").String() == "tool_use" {
+			if block.Get("type").String() == "thinking" {
+				thinkingBlocks[event.Get("index").Int()] = true
+			} else if block.Get("type").String() == "tool_use" {
 				idx := nextToolIndex
 				toolIndex[event.Get("index").Int()] = idx
 				nextToolIndex++
@@ -511,6 +538,15 @@ func streamClaudeToOpenAI(rc *relayContext, resp *http.Response) usage {
 			case "text_delta":
 				writeOpenAIChunkData(rc, openAIChunk(id, created, rc.modelName,
 					gin.H{"content": delta.Get("text").String()}, nil))
+			case "thinking_delta":
+				writeOpenAIChunkData(rc, openAIChunk(id, created, rc.modelName,
+					gin.H{"reasoning_content": delta.Get("thinking").String()}, nil))
+			case "signature_delta":
+				if thinkingBlocks[event.Get("index").Int()] {
+					writeOpenAIChunkData(rc, openAIChunk(id, created, rc.modelName, gin.H{
+						"extra_content": gin.H{"anthropic": gin.H{"thinking_signature": delta.Get("signature").String()}},
+					}, nil))
+				}
 			case "input_json_delta":
 				if idx, ok := toolIndex[event.Get("index").Int()]; ok {
 					writeOpenAIChunkData(rc, openAIChunk(id, created, rc.modelName, gin.H{
@@ -558,8 +594,8 @@ func streamOpenAIToClaude(rc *relayContext, resp *http.Response) usage {
 	var u usage
 	gotUsage := false
 	finishReason := ""
-	blockIndex := -1     // current claude content block index
-	blockType := ""      // "text" | "tool_use" | ""
+	blockIndex := -1 // current claude content block index
+	blockType := ""  // "text" | "tool_use" | ""
 	curToolIndex := int64(-1)
 	var outputText strings.Builder
 

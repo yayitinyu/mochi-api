@@ -3,6 +3,7 @@ import { CheckIcon, CopyIcon, KeyIcon, PlusIcon, TrashIcon } from '@phosphor-ico
 import { api, ApiError } from '../lib/api';
 import type { Token } from '../lib/types';
 import { formatTime } from '../lib/format';
+import { copyText } from '../lib/clipboard';
 import { Button } from '../components/Button';
 import { Card } from '../components/Card';
 import { Field, Input } from '../components/Field';
@@ -62,9 +63,12 @@ export function KeysPage() {
   }
 
   async function copyKey() {
-    await navigator.clipboard.writeText(createdKey);
-    setCopied(true);
-    setTimeout(() => setCopied(false), 1500);
+    if (await copyText(createdKey)) {
+      setCopied(true);
+      setTimeout(() => setCopied(false), 1500);
+    } else {
+      toast('error', '复制失败，请手动选择复制');
+    }
   }
 
   return (
@@ -94,11 +98,11 @@ export function KeysPage() {
           <table className="w-full text-sm">
             <thead>
               <tr className="text-left text-xs font-bold text-ink-soft">
-                <th className="px-6 py-4">名称</th>
-                <th className="px-4 py-4">密钥</th>
-                <th className="px-4 py-4">状态</th>
-                <th className="px-4 py-4">创建时间</th>
-                <th className="px-6 py-4 text-right">操作</th>
+                <th className="px-6 py-4 whitespace-nowrap">名称</th>
+                <th className="px-4 py-4 whitespace-nowrap">密钥</th>
+                <th className="px-4 py-4 whitespace-nowrap">状态</th>
+                <th className="px-4 py-4 whitespace-nowrap">创建时间</th>
+                <th className="px-6 py-4 text-right whitespace-nowrap">操作</th>
               </tr>
             </thead>
             <tbody>
