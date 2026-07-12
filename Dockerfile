@@ -4,6 +4,7 @@ WORKDIR /app/web
 COPY web/package.json web/package-lock.json ./
 RUN npm ci
 COPY web/ ./
+ENV NODE_OPTIONS="--max-old-space-size=4096"
 RUN npm run build
 
 # --- Stage 2: build backend (pure Go, no cgo) ---
