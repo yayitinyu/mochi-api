@@ -1,0 +1,11 @@
+.git
+*.md
+*.db
+*.db-journal
+mochi.exe
+mochi
+cookies*.txt
+web/node_modules
+web/dist
+devtools/shots
+data

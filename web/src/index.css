@@ -1,0 +1,104 @@
+@import 'tailwindcss';
+
+/* Class-based dark mode, toggled on <html>. */
+@custom-variant dark (&:where(.dark, .dark *));
+
+/* Rounded, friendly type: Nunito for Latin, system rounded CJK fallback. */
+@font-face {
+  font-family: 'Nunito';
+  font-style: normal;
+  font-weight: 400 800;
+  font-display: swap;
+  src: url('https://fonts.gstatic.com/s/nunito/v26/XRXV3I6Li01BKofINeaBTMnFcQ.woff2') format('woff2');
+}
+
+@theme {
+  --font-sans: 'Nunito', 'PingFang SC', 'Hiragino Sans GB', 'Microsoft YaHei UI Rounded',
+    'Microsoft YaHei', system-ui, sans-serif;
+
+  /* Sakura pastel palette — single accent locked across the app. */
+  --color-sakura-50: #fff5f8;
+  --color-sakura-100: #ffe6ef;
+  --color-sakura-200: #ffccdd;
+  --color-sakura-300: #ffa6c4;
+  --color-sakura-400: #ff7aa8;
+  --color-sakura-500: #f95d92;
+  --color-sakura-600: #e63e79;
+  --color-sakura-700: #c02a61;
+
+  /* Neutral tokens; values swap in dark mode below. */
+  --color-cream: #fffaf6;
+  --color-ink: #4a3f47;
+  --color-ink-soft: #8a7d85;
+  --color-surface: #ffffff;
+
+  --color-matcha: #7fb98a;
+  --color-sky: #7fb3e0;
+  --color-honey: #f5b955;
+}
+
+/* Dark theme: swap neutrals, keep the sakura accent recognisable. */
+.dark {
+  --color-cream: #221a26;
+  --color-ink: #f2e8ee;
+  --color-ink-soft: #a898a3;
+  --color-surface: #2e2433;
+}
+
+:root {
+  color-scheme: light;
+}
+.dark {
+  color-scheme: dark;
+}
+
+html,
+body,
+#root {
+  height: 100%;
+}
+
+body {
+  margin: 0;
+  font-family: var(--font-sans);
+  background:
+    radial-gradient(1200px 600px at 100% -10%, var(--color-sakura-100), transparent 60%),
+    radial-gradient(1000px 500px at -10% 110%, #f3f9ff, transparent 55%),
+    var(--color-cream);
+  color: var(--color-ink);
+  -webkit-font-smoothing: antialiased;
+}
+
+.dark body {
+  background:
+    radial-gradient(1200px 600px at 100% -10%, rgba(249, 93, 146, 0.12), transparent 60%),
+    radial-gradient(1000px 500px at -10% 110%, rgba(127, 179, 224, 0.08), transparent 55%),
+    var(--color-cream);
+}
+
+/* Custom scrollbar to match the soft theme. */
+::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+::-webkit-scrollbar-thumb {
+  background: var(--color-sakura-200);
+  border-radius: 999px;
+  border: 2px solid transparent;
+  background-clip: content-box;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: var(--color-sakura-300);
+  background-clip: content-box;
+}
+.dark ::-webkit-scrollbar-thumb {
+  background: rgba(249, 93, 146, 0.35);
+  background-clip: content-box;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  * {
+    animation-duration: 0.01ms !important;
+    transition-duration: 0.01ms !important;
+  }
+}

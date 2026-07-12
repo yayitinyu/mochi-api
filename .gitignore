@@ -1,0 +1,16 @@
+# build output
+/mochi.exe
+/mochi
+*.db
+*.db-journal
+
+# frontend
+web/node_modules/
+web/dist/*
+!web/dist/.gitkeep
+
+# dev artifacts
+devtools/shots/
+
+# cookies from manual testing
+cookies*.txt
