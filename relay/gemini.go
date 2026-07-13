@@ -56,14 +56,21 @@ func convertRequestOpenAIToGemini(body []byte) ([]byte, error) {
 				name = toolNames[toolCallID]
 			}
 			if name == "" {
+				// Encoded tool_call ids carry the function name so clients that
+				// omit tool message "name" still produce a valid functionResponse.
 				name, _ = decodeToolCallID(toolCallID)
 			}
+			responseBody := map[string]any{
+				"name":     name,
+				"response": map[string]any{"content": contentText(msg.Get("content"))},
+			}
+			// Only forward id when non-empty; an empty id is unnecessary when
+			// name is present and confuses some Gemini backends.
+			if toolCallID != "" {
+				responseBody["id"] = toolCallID
+			}
 			fnResp := map[string]any{
-				"functionResponse": map[string]any{
-					"name":     name,
-					"id":       toolCallID,
-					"response": map[string]any{"content": contentText(msg.Get("content"))},
-				},
+				"functionResponse": responseBody,
 			}
 
 			appended := false
@@ -114,20 +121,29 @@ func convertRequestOpenAIToGemini(body []byte) ([]byte, error) {
 				if name == "" {
 					name = tc.Get("function.name").String()
 				}
-				functionCall := map[string]any{
-					"name": name,
-					"args": args,
-					"id":   tcID,
-				}
-				part := map[string]any{"functionCall": functionCall}
 				if signature == "" {
 					signature = tc.Get("extra_content.google.thought_signature").String()
 				}
+				// Message-level signature is a last-resort fallback used by some
+				// clients that only attach extra_content on the assistant message.
+				if signature == "" {
+					signature = msg.Get("extra_content.google.thought_signature").String()
+				}
+				functionCall := map[string]any{
+					"name": name,
+					"args": args,
+				}
+				if tcID != "" {
+					functionCall["id"] = tcID
+				}
+				part := map[string]any{"functionCall": functionCall}
 				if signature != "" {
 					part["thoughtSignature"] = signature
 				}
 				parts = append(parts, part)
-				toolNames[tcID] = name
+				if tcID != "" && name != "" {
+					toolNames[tcID] = name
+				}
 			}
 
 			if len(parts) > 0 {
@@ -380,15 +396,12 @@ func geminiCandidateToOpenAI(candidate gjson.Result) (string, string, []map[stri
 	var reasoning strings.Builder
 	var toolCalls []map[string]any
 	var messageExtra map[string]any
-
 	lastThoughtSignature := ""
+
 	for _, part := range candidate.Get("content.parts").Array() {
 		if sig := part.Get("thoughtSignature").String(); sig != "" {
 			lastThoughtSignature = sig
 		}
-	}
-
-	for _, part := range candidate.Get("content.parts").Array() {
 		if t := part.Get("text"); t.Exists() {
 			if part.Get("thought").Bool() {
 				reasoning.WriteString(t.String())
@@ -402,11 +415,17 @@ func geminiCandidateToOpenAI(candidate gjson.Result) (string, string, []map[stri
 		if fc := part.Get("functionCall"); fc.Exists() {
 			args, _ := json.Marshal(fc.Get("args").Value())
 			name := fc.Get("name").String()
-			signature := lastThoughtSignature
-			callID := fc.Get("id").String()
-			if callID == "" {
-				callID = encodeToolCallID(name, signature)
+			// Prefer the part's own signature; fall back to the most recent thought
+			// signature seen earlier in this candidate (common for Gemini 3).
+			signature := part.Get("thoughtSignature").String()
+			if signature == "" {
+				signature = lastThoughtSignature
 			}
+			// Always pack name+signature into the OpenAI tool_call id. Many clients
+			// strip non-standard fields such as extra_content when replaying history,
+			// which would otherwise drop thought_signature and leave functionResponse
+			// name empty when the tool message omits "name".
+			callID := encodeToolCallID(name, signature)
 			call := map[string]any{
 				"id":   callID,
 				"type": "function",
@@ -515,11 +534,11 @@ func streamGeminiToOpenAI(rc *relayContext, resp *http.Response) usage {
 			if fc := part.Get("functionCall"); fc.Exists() {
 				args, _ := json.Marshal(fc.Get("args").Value())
 				name := fc.Get("name").String()
-				signature := lastThoughtSignature
-				callID := fc.Get("id").String()
-				if callID == "" {
-					callID = encodeToolCallID(name, signature)
+				signature := part.Get("thoughtSignature").String()
+				if signature == "" {
+					signature = lastThoughtSignature
 				}
+				callID := encodeToolCallID(name, signature)
 				call := gin.H{
 					"index": toolIndex,
 					"id":    callID,
@@ -690,7 +709,8 @@ func streamGeminiToClaude(rc *relayContext, resp *http.Response) usage {
 }
 
 // encodeToolCallID packages the function name and thought signature into a single
-// OpenAI-compatible tool call ID. Standard clients will echo this ID back to us.
+// OpenAI-compatible tool call ID. Standard clients will echo this ID back to us,
+// which is how we recover both fields after clients strip extra_content.
 func encodeToolCallID(name, signature string) string {
 	data := name + "|" + signature
 	encoded := base64.RawURLEncoding.EncodeToString([]byte(data))
@@ -698,19 +718,26 @@ func encodeToolCallID(name, signature string) string {
 }
 
 // decodeToolCallID extracts the function name and thought signature from an encoded ID.
+// Returns empty strings when the id is not one we produced (e.g. a plain OpenAI id).
 func decodeToolCallID(id string) (string, string) {
 	if !strings.HasPrefix(id, "call_") {
 		return "", ""
 	}
 	encoded := strings.TrimPrefix(id, "call_")
-	decodedBytes, err := base64.RawURLEncoding.DecodeString(encoded)
-	if err != nil {
+	if encoded == "" {
 		return "", ""
 	}
-	parts := strings.SplitN(string(decodedBytes), "|", 2)
-	if len(parts) == 2 {
-		return parts[0], parts[1]
+	decodedBytes, err := base64.RawURLEncoding.DecodeString(encoded)
+	if err != nil {
+		// Some clients use call_<random> that is not valid base64.
+		return "", ""
 	}
-	return "", ""
+	decoded := string(decodedBytes)
+	// Our encoding always inserts a '|' separator between name and signature.
+	name, signature, ok := strings.Cut(decoded, "|")
+	if !ok {
+		return "", ""
+	}
+	return name, signature
 }
 

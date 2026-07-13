@@ -52,15 +52,23 @@ func convertRequestResponsesToOpenAIChat(body []byte) ([]byte, error) {
 		for _, item := range input.Array() {
 			switch item.Get("type").String() {
 			case "function_call":
+				callID := item.Get("call_id").String()
+				name := item.Get("name").String()
+				decodedName, decodedSig := decodeToolCallID(callID)
+				if name == "" {
+					name = decodedName
+				}
 				call := map[string]any{
-					"id":   item.Get("call_id").String(),
+					"id":   callID,
 					"type": "function",
 					"function": map[string]any{
-						"name": item.Get("name").String(), "arguments": item.Get("arguments").String(),
+						"name": name, "arguments": item.Get("arguments").String(),
 					},
 				}
 				if extra := item.Get("extra_content"); extra.Exists() {
 					call["extra_content"] = extra.Value()
+				} else if decodedSig != "" {
+					call["extra_content"] = map[string]any{"google": map[string]any{"thought_signature": decodedSig}}
 				}
 				if len(messages) > 0 && messages[len(messages)-1]["role"] == "assistant" {
 					if calls, ok := messages[len(messages)-1]["tool_calls"].([]any); ok {
@@ -72,10 +80,15 @@ func convertRequestResponsesToOpenAIChat(body []byte) ([]byte, error) {
 					"role": "assistant", "content": nil, "tool_calls": []any{call},
 				})
 			case "function_call_output":
-				messages = append(messages, map[string]any{
-					"role": "tool", "tool_call_id": item.Get("call_id").String(),
+				callID := item.Get("call_id").String()
+				toolMsg := map[string]any{
+					"role": "tool", "tool_call_id": callID,
 					"content": responseOutputText(item.Get("output")),
-				})
+				}
+				if name, _ := decodeToolCallID(callID); name != "" {
+					toolMsg["name"] = name
+				}
+				messages = append(messages, toolMsg)
 			case "reasoning":
 				// Reasoning items carry provider state, not a user-visible message.
 				// Direct Responses upstreams receive them unchanged.
@@ -368,8 +381,18 @@ func (s *responseStream) addText(text string) {
 }
 
 func (s *responseStream) addFunctionCall(callID, name, arguments, signature string) {
-	if callID == "" {
-		callID = "call_" + common.GenerateKey(16)
+	// Prefer an id that already embeds name+signature (from the Gemini→OpenAI
+	// bridge). Otherwise encode now so clients that drop extra_content can still
+	// round-trip both fields via call_id alone.
+	if decodedName, decodedSig := decodeToolCallID(callID); decodedName != "" {
+		if name == "" {
+			name = decodedName
+		}
+		if signature == "" {
+			signature = decodedSig
+		}
+	} else {
+		callID = encodeToolCallID(name, signature)
 	}
 	index := len(s.output)
 	itemID := "fc_" + common.GenerateKey(24)
@@ -533,6 +556,7 @@ func streamGeminiToResponses(rc *relayContext, resp *http.Response) usage {
 	stream := newResponseStream(rc)
 	var u usage
 	reasoningTokens := 0
+	lastThoughtSignature := ""
 	scanSSE(resp.Body, func(line string) {
 		payload, ok := strings.CutPrefix(line, "data:")
 		if !ok {
@@ -546,6 +570,9 @@ func streamGeminiToResponses(rc *relayContext, resp *http.Response) usage {
 		}
 		candidate := event.Get("candidates.0")
 		for _, part := range candidate.Get("content.parts").Array() {
+			if sig := part.Get("thoughtSignature").String(); sig != "" {
+				lastThoughtSignature = sig
+			}
 			signature := part.Get("thoughtSignature").String()
 			if part.Get("thought").Bool() {
 				stream.addReasoning(part.Get("text").String(), signature)
@@ -556,7 +583,11 @@ func streamGeminiToResponses(rc *relayContext, resp *http.Response) usage {
 			}
 			if call := part.Get("functionCall"); call.Exists() {
 				args, _ := json.Marshal(call.Get("args").Value())
-				stream.addFunctionCall(call.Get("id").String(), call.Get("name").String(), string(args), signature)
+				if signature == "" {
+					signature = lastThoughtSignature
+				}
+				// Always encode via addFunctionCall so call_id round-trips name+signature.
+				stream.addFunctionCall("", call.Get("name").String(), string(args), signature)
 			}
 		}
 		if candidate.Get("finishReason").String() == "MAX_TOKENS" {

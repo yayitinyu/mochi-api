@@ -191,7 +191,10 @@ func TestGeminiThoughtsAndSignaturesBecomeOpenAIExtensions(t *testing.T) {
 	require.Equal(t, "I should verify this.", gjson.GetBytes(converted, "choices.0.message.reasoning_content").String())
 	require.Equal(t, "Final answer.", gjson.GetBytes(converted, "choices.0.message.content").String())
 	require.Equal(t, "reason-sig", gjson.GetBytes(converted, "choices.0.message.extra_content.google.thought_signature").String())
-	require.Equal(t, "call-1", gjson.GetBytes(converted, "choices.0.message.tool_calls.0.id").String())
+	// Native Gemini ids are replaced with an encoded id that preserves name+signature
+	// for clients that strip extra_content on the next turn.
+	expectedID := encodeToolCallID("lookup", "tool-sig")
+	require.Equal(t, expectedID, gjson.GetBytes(converted, "choices.0.message.tool_calls.0.id").String())
 	require.Equal(t, "tool-sig", gjson.GetBytes(converted, "choices.0.message.tool_calls.0.extra_content.google.thought_signature").String())
 	require.Equal(t, int64(12), gjson.GetBytes(converted, "usage.completion_tokens").Int())
 	require.Equal(t, int64(5), gjson.GetBytes(converted, "usage.completion_tokens_details.reasoning_tokens").Int())
@@ -389,5 +392,85 @@ func TestGeminiMessageGrouping(t *testing.T) {
 	require.Equal(t, "search", contentsResult.Get("2.parts.1.functionResponse.name").String())
 }
 
+func TestGeminiNativeFunctionCallIDStillEncodesSignature(t *testing.T) {
+	// Gemini often returns both a native functionCall.id and thoughtSignature on the
+	// same part. Using the native id as-is would drop the signature once clients strip
+	// extra_content, which triggers Gemini's thought_signature requirement error.
+	geminiResponse := []byte(`{
+		"candidates":[{"content":{"parts":[
+			{"functionCall":{"id":"native-fc-42","name":"default_api:web_search","args":{"query":"weather"}},"thoughtSignature":"sig-native-42"}
+		]},"finishReason":"STOP"}],
+		"usageMetadata":{"promptTokenCount":3,"candidatesTokenCount":2}
+	}`)
+
+	openaiBytes, err := convertResponseGeminiToOpenAI(geminiResponse, "gemini-3-flash-preview")
+	require.NoError(t, err)
+
+	toolCallID := gjson.GetBytes(openaiBytes, "choices.0.message.tool_calls.0.id").String()
+	require.Equal(t, encodeToolCallID("default_api:web_search", "sig-native-42"), toolCallID)
+	require.NotEqual(t, "native-fc-42", toolCallID)
+
+	// Client replays history without extra_content (common OpenAI-compatible behavior).
+	clientRequest := []byte(`{
+		"model":"gemini-3-flash-preview",
+		"messages":[
+			{"role":"assistant","tool_calls":[{"id":"` + toolCallID + `","type":"function","function":{"name":"default_api:web_search","arguments":"{\"query\":\"weather\"}"}}]},
+			{"role":"tool","tool_call_id":"` + toolCallID + `","content":"sunny"}
+		]
+	}`)
+
+	converted, err := convertRequestOpenAIToGemini(clientRequest)
+	require.NoError(t, err)
+	require.Equal(t, "sig-native-42", gjson.GetBytes(converted, "contents.0.parts.0.thoughtSignature").String())
+	require.Equal(t, "default_api:web_search", gjson.GetBytes(converted, "contents.0.parts.0.functionCall.name").String())
+	require.Equal(t, "default_api:web_search", gjson.GetBytes(converted, "contents.1.parts.0.functionResponse.name").String())
+	require.NotEmpty(t, gjson.GetBytes(converted, "contents.1.parts.0.functionResponse.name").String())
+}
+
+func TestGeminiToolResponseNameFromEncodedIDWithoutAssistantName(t *testing.T) {
+	// Some clients only send tool results with tool_call_id, without a "name" field
+	// and without replaying the assistant tool_calls that would populate toolNames.
+	toolCallID := encodeToolCallID("default_api:web_search", "sig-only-in-id")
+	body := []byte(`{
+		"model":"gemini-3-flash-preview",
+		"messages":[
+			{"role":"tool","tool_call_id":"` + toolCallID + `","content":"result payload"}
+		]
+	}`)
+
+	converted, err := convertRequestOpenAIToGemini(body)
+	require.NoError(t, err)
+	require.Equal(t, "default_api:web_search", gjson.GetBytes(converted, "contents.0.parts.0.functionResponse.name").String())
+	require.Equal(t, toolCallID, gjson.GetBytes(converted, "contents.0.parts.0.functionResponse.id").String())
+}
+
+func TestGeminiStreamNativeFunctionCallIDEncodesSignature(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	recorder := httptest.NewRecorder()
+	context, _ := gin.CreateTestContext(recorder)
+	rc := &relayContext{c: context, clientFormat: FormatOpenAI, modelName: "gemini-3-flash-preview"}
+	upstream := &http.Response{
+		Body: io.NopCloser(strings.NewReader(
+			`data: {"candidates":[{"content":{"parts":[{"functionCall":{"id":"native-stream-1","name":"lookup","args":{"q":1}},"thoughtSignature":"stream-sig-9"}]},"finishReason":"STOP"}]}` + "\n\n",
+		)),
+	}
+
+	_ = streamGeminiToOpenAI(rc, upstream)
+	body := recorder.Body.String()
+	expectedID := encodeToolCallID("lookup", "stream-sig-9")
+	require.Contains(t, body, `"id":"`+expectedID+`"`)
+	require.Contains(t, body, `"thought_signature":"stream-sig-9"`)
+	require.NotContains(t, body, `"id":"native-stream-1"`)
+}
+
+func TestDecodeToolCallIDIgnoresPlainOpenAIIds(t *testing.T) {
+	name, sig := decodeToolCallID("call_AbCdEfGhIjKlMnOp")
+	require.Equal(t, "", name)
+	require.Equal(t, "", sig)
+
+	name, sig = decodeToolCallID(encodeToolCallID("web_search", "abc|def"))
+	require.Equal(t, "web_search", name)
+	require.Equal(t, "abc|def", sig)
+}
 
 
