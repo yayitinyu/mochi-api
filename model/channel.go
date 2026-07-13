@@ -1,6 +1,9 @@
 package model
 
-import "strings"
+import (
+	"sort"
+	"strings"
+)
 
 const (
 	ChannelTypeOpenAI    = "openai"
@@ -72,17 +75,33 @@ func GetEnabledModels() ([]string, error) {
 	if err != nil {
 		return nil, err
 	}
-	seen := make(map[string]bool)
-	var models []string
-	for _, ch := range channels {
-		for _, m := range ch.ModelList() {
-			if !seen[m] {
-				seen[m] = true
-				models = append(models, m)
+	return channelModelNames(channels), nil
+}
+
+// GetConfiguredModels returns models from all channels, including disabled
+// channels, for dashboard configuration such as model pricing.
+func GetConfiguredModels() ([]string, error) {
+	channels, err := GetAllChannels()
+	if err != nil {
+		return nil, err
+	}
+	return channelModelNames(channels), nil
+}
+
+func channelModelNames(channels []Channel) []string {
+	seen := make(map[string]struct{})
+	models := make([]string, 0)
+	for i := range channels {
+		for _, name := range channels[i].ModelList() {
+			if _, exists := seen[name]; exists {
+				continue
 			}
+			seen[name] = struct{}{}
+			models = append(models, name)
 		}
 	}
-	return models, nil
+	sort.Strings(models)
+	return models
 }
 
 func GetChannelById(id int) (*Channel, error) {

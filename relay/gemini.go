@@ -149,7 +149,7 @@ func convertRequestOpenAIToGemini(body []byte) ([]byte, error) {
 				"description": fn.Get("description").String(),
 			}
 			if params := fn.Get("parameters"); params.Exists() {
-				decl["parameters"] = params.Value()
+				decl["parameters"] = sanitizeGeminiSchema(params.Value())
 			}
 			decls = append(decls, decl)
 		}
@@ -177,6 +177,33 @@ func convertRequestOpenAIToGemini(body []byte) ([]byte, error) {
 	}
 
 	return json.Marshal(out)
+}
+
+// sanitizeGeminiSchema removes JSON Schema keywords that Gemini's
+// FunctionDeclaration.parameters field does not accept. OpenAI-compatible
+// clients commonly attach these keywords at every nested object level.
+func sanitizeGeminiSchema(value any) any {
+	switch schema := value.(type) {
+	case []any:
+		cleaned := make([]any, len(schema))
+		for i, item := range schema {
+			cleaned[i] = sanitizeGeminiSchema(item)
+		}
+		return cleaned
+	case map[string]any:
+		cleaned := make(map[string]any, len(schema))
+		for key, item := range schema {
+			switch key {
+			case "$schema", "additionalProperties":
+				continue
+			default:
+				cleaned[key] = sanitizeGeminiSchema(item)
+			}
+		}
+		return cleaned
+	default:
+		return value
+	}
 }
 
 func applyGeminiReasoningEffort(config map[string]any, modelName, effort string) {

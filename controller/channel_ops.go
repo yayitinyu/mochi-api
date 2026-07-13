@@ -69,3 +69,14 @@ func FetchChannelModels(c *gin.Context) {
 	}
 	respondData(c, gin.H{"models": models})
 }
+
+// ListConfiguredModels returns the deduplicated model names configured on all
+// channels without exposing channel credentials. GET /api/channels/models
+func ListConfiguredModels(c *gin.Context) {
+	models, err := model.GetConfiguredModels()
+	if err != nil {
+		respondError(c, http.StatusInternalServerError, "数据库错误")
+		return
+	}
+	respondData(c, models)
+}

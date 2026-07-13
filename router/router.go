@@ -70,6 +70,7 @@ func SetApiRouter(r *gin.Engine) {
 	admin := api.Group("", middleware.UserAuth(), middleware.AdminAuth())
 	{
 		admin.GET("/channels", controller.ListChannels)
+		admin.GET("/channels/models", controller.ListConfiguredModels)
 		admin.POST("/channels", controller.CreateChannel)
 		admin.PUT("/channels/:id", controller.UpdateChannel)
 		admin.DELETE("/channels/:id", controller.DeleteChannel)

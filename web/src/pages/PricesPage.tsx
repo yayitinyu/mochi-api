@@ -1,5 +1,12 @@
 import { useEffect, useState } from 'react';
-import { PencilSimpleIcon, PlusIcon, TagIcon, TrashIcon } from '@phosphor-icons/react';
+import {
+  DownloadSimpleIcon,
+  PencilSimpleIcon,
+  PlusIcon,
+  TagIcon,
+  TrashIcon,
+  XIcon,
+} from '@phosphor-icons/react';
 import { api, ApiError } from '../lib/api';
 import type { ModelPrice } from '../lib/types';
 import { Button } from '../components/Button';
@@ -24,6 +31,9 @@ export function PricesPage() {
   const [editing, setEditing] = useState<ModelPrice | null>(null);
   const [form, setForm] = useState<Form>(empty);
   const [busy, setBusy] = useState(false);
+  const [fetchingModels, setFetchingModels] = useState(false);
+  const [availableModels, setAvailableModels] = useState<string[]>([]);
+  const [modelQuery, setModelQuery] = useState('');
 
   async function load() {
     setPrices((await api.get<ModelPrice[]>('/api/prices')) ?? []);
@@ -35,12 +45,50 @@ export function PricesPage() {
   function openCreate() {
     setEditing(null);
     setForm(empty);
+    setAvailableModels([]);
+    setModelQuery('');
     setOpen(true);
   }
   function openEdit(p: ModelPrice) {
     setEditing(p);
     setForm({ model: p.model, input_price: p.input_price, output_price: p.output_price });
+    setAvailableModels([]);
+    setModelQuery('');
     setOpen(true);
+  }
+
+  async function fetchConfiguredModels() {
+    setFetchingModels(true);
+    setAvailableModels([]);
+    setModelQuery('');
+    try {
+      const models = (await api.get<string[]>('/api/channels/models')) ?? [];
+      const pricedModels = new Set((prices ?? []).map((price) => price.model));
+      const selectable = [...new Set(models.map((model) => model.trim()).filter(Boolean))].filter(
+        (model) => !pricedModels.has(model),
+      );
+      if (models.length === 0) {
+        toast('error', '渠道中还没有已添加的模型');
+        return;
+      }
+      if (selectable.length === 0) {
+        toast('success', '所有已添加模型都已配置价格');
+        return;
+      }
+      setAvailableModels(selectable);
+      setModelQuery('');
+      toast('success', `已获取 ${selectable.length} 个未定价模型`);
+    } catch (err) {
+      toast('error', err instanceof ApiError ? err.message : '获取模型失败');
+    } finally {
+      setFetchingModels(false);
+    }
+  }
+
+  function selectConfiguredModel(model: string) {
+    setForm((current) => ({ ...current, model }));
+    setAvailableModels([]);
+    setModelQuery('');
   }
 
   async function save(e: React.FormEvent) {
@@ -82,6 +130,10 @@ export function PricesPage() {
       toast('error', '删除失败');
     }
   }
+
+  const visibleModels = availableModels.filter((model) =>
+    model.toLocaleLowerCase().includes(modelQuery.trim().toLocaleLowerCase()),
+  );
 
   return (
     <div className="max-w-4xl">
@@ -156,13 +208,66 @@ export function PricesPage() {
       <Modal open={open} onClose={() => setOpen(false)} title={editing ? '编辑价格' : '新建价格'}>
         <form onSubmit={save} className="flex flex-col gap-4">
           <Field label="模型名" hint="精确匹配优先；claude-3-5* 可匹配该前缀所有模型">
-            <Input
-              value={form.model}
-              onChange={(e) => setForm({ ...form, model: e.target.value })}
-              placeholder="gpt-4o"
-              required
-            />
+            <div className="flex flex-col gap-2 sm:flex-row">
+              <Input
+                value={form.model}
+                onChange={(e) => setForm({ ...form, model: e.target.value })}
+                placeholder="gpt-4o"
+                required
+                className="flex-1"
+              />
+              {!editing && (
+                <Button
+                  type="button"
+                  variant="soft"
+                  className="shrink-0 px-3 text-xs"
+                  disabled={fetchingModels}
+                  onClick={fetchConfiguredModels}
+                >
+                  <DownloadSimpleIcon size={14} weight="bold" />
+                  {fetchingModels ? '获取中…' : '获取已添加模型'}
+                </Button>
+              )}
+            </div>
           </Field>
+          {availableModels.length > 0 && (
+            <section className="rounded-2xl border border-sakura-100 bg-sakura-50/60 p-3 dark:border-white/10 dark:bg-sakura-500/5">
+              <div className="mb-2 flex items-center justify-between gap-2">
+                <span className="text-sm font-bold text-ink">选择未定价模型</span>
+                <button
+                  type="button"
+                  aria-label="关闭模型选择"
+                  className="rounded-full p-1 text-ink-soft transition hover:bg-surface hover:text-ink"
+                  onClick={() => setAvailableModels([])}
+                >
+                  <XIcon size={14} weight="bold" />
+                </button>
+              </div>
+              <Input
+                value={modelQuery}
+                onChange={(event) => setModelQuery(event.target.value)}
+                placeholder="搜索已添加模型"
+                className="mb-2 w-full bg-surface"
+              />
+              <div className="max-h-44 overflow-y-auto rounded-xl bg-surface/70 p-1">
+                {visibleModels.length === 0 ? (
+                  <p className="p-3 text-center text-xs font-bold text-ink-soft">没有匹配的模型</p>
+                ) : (
+                  visibleModels.map((model) => (
+                    <button
+                      key={model}
+                      type="button"
+                      className="flex w-full items-center gap-2 rounded-xl px-2.5 py-2 text-left transition hover:bg-sakura-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-sakura-300 dark:hover:bg-sakura-500/10"
+                      onClick={() => selectConfiguredModel(model)}
+                    >
+                      <ModelIcon name={model} size={14} />
+                      <span className="min-w-0 break-all font-mono text-xs text-ink">{model}</span>
+                    </button>
+                  ))
+                )}
+              </div>
+            </section>
+          )}
           <div className="grid grid-cols-2 gap-3">
             <Field label="输入价（$/1M）">
               <Input

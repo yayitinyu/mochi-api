@@ -6,6 +6,7 @@ import {
   PlusIcon,
   PlugsConnectedIcon,
   TrashIcon,
+  XIcon,
 } from '@phosphor-icons/react';
 import { api, ApiError } from '../lib/api';
 import type { Channel } from '../lib/types';
@@ -24,9 +25,11 @@ interface Form {
   base_url: string;
   api_key: string;
   models: string;
-  priority: number;
+  priority: number | '';
   status: number;
 }
+
+type ModelPickerMode = 'add' | 'remove' | null;
 
 const empty: Form = {
   name: '',
@@ -34,9 +37,13 @@ const empty: Form = {
   base_url: '',
   api_key: '',
   models: '',
-  priority: 0,
+  priority: '',
   status: 1,
 };
+
+function parseModels(value: string): string[] {
+  return [...new Set(value.split(',').map((model) => model.trim()).filter(Boolean))];
+}
 
 export function ChannelsPage() {
   const toast = useToast();
@@ -50,6 +57,7 @@ export function ChannelsPage() {
   const [availableModels, setAvailableModels] = useState<string[]>([]);
   const [selectedModels, setSelectedModels] = useState<Set<string>>(new Set());
   const [modelQuery, setModelQuery] = useState('');
+  const [modelPickerMode, setModelPickerMode] = useState<ModelPickerMode>(null);
   const [preset, setPreset] = useState('custom');
 
   async function load() {
@@ -66,6 +74,7 @@ export function ChannelsPage() {
     setAvailableModels([]);
     setSelectedModels(new Set());
     setModelQuery('');
+    setModelPickerMode(null);
     setOpen(true);
   }
   function openEdit(ch: Channel) {
@@ -75,6 +84,7 @@ export function ChannelsPage() {
     setAvailableModels([]);
     setSelectedModels(new Set());
     setModelQuery('');
+    setModelPickerMode(null);
     setOpen(true);
   }
 
@@ -94,12 +104,13 @@ export function ChannelsPage() {
   async function save(e: React.FormEvent) {
     e.preventDefault();
     setBusy(true);
+    const payload = { ...form, priority: form.priority === '' ? 0 : form.priority };
     try {
       if (editing) {
-        await api.put(`/api/channels/${editing.id}`, form);
+        await api.put(`/api/channels/${editing.id}`, payload);
         toast('success', '已更新');
       } else {
-        await api.post('/api/channels', form);
+        await api.post('/api/channels', payload);
         toast('success', '已创建');
       }
       setOpen(false);
@@ -149,14 +160,31 @@ export function ChannelsPage() {
         api_key: form.api_key,
         channel_id: editing?.id ?? 0,
       });
-      const models = res.models ?? [];
-      if (models.length === 0) {
+      const fetchedModels = [...new Set((res.models ?? []).map((model) => model.trim()).filter(Boolean))];
+      if (fetchedModels.length === 0) {
         toast('error', '上游没有返回任何模型');
       } else {
-        setAvailableModels(models);
-        setSelectedModels(new Set(models));
+        const existing = new Set(parseModels(form.models));
+        const newModels = fetchedModels.filter((model) => !existing.has(model));
+        if (newModels.length === 0) {
+          setAvailableModels([]);
+          setSelectedModels(new Set());
+          setModelQuery('');
+          setModelPickerMode(null);
+          toast('success', `上游返回的 ${fetchedModels.length} 个模型均已添加`);
+          return;
+        }
+        setAvailableModels(newModels);
+        setSelectedModels(new Set(newModels));
         setModelQuery('');
-        toast('success', `已获取 ${models.length} 个模型，请勾选要加入的模型`);
+        setModelPickerMode('add');
+        const excluded = fetchedModels.length - newModels.length;
+        toast(
+          'success',
+          excluded > 0
+            ? `发现 ${newModels.length} 个新模型，已排除 ${excluded} 个已添加模型`
+            : `已获取 ${newModels.length} 个模型，请勾选要加入的模型`,
+        );
       }
     } catch (err) {
       toast('error', err instanceof ApiError ? err.message : '获取失败');
@@ -175,20 +203,45 @@ export function ChannelsPage() {
   }
 
   function addSelectedModels() {
-    const existing = form.models
-      .split(',')
-      .map((model) => model.trim())
-      .filter(Boolean);
+    const existing = parseModels(form.models);
     const merged = [...new Set([...existing, ...availableModels.filter((model) => selectedModels.has(model))])];
     setForm((current) => ({ ...current, models: merged.join(', ') }));
-    toast('success', `已加入 ${merged.length - existing.length} 个新模型`);
-    setAvailableModels([]);
-    setSelectedModels(new Set());
+    toast('success', `已加入 ${merged.length - existing.length} 个新模型，保存后生效`);
+    closeModelPicker();
   }
 
-  const visibleModels = availableModels.filter((model) =>
+  function openModelCleanup() {
+    if (configuredModels.length === 0) {
+      toast('error', '当前没有可清理的模型');
+      return;
+    }
+    setAvailableModels([]);
+    setSelectedModels(new Set());
+    setModelQuery('');
+    setModelPickerMode('remove');
+  }
+
+  function removeSelectedModels() {
+    const remaining = configuredModels.filter((model) => !selectedModels.has(model));
+    const removedCount = configuredModels.length - remaining.length;
+    setForm((current) => ({ ...current, models: remaining.join(', ') }));
+    toast('success', `已移除 ${removedCount} 个模型，保存后生效`);
+    closeModelPicker();
+  }
+
+  function closeModelPicker() {
+    setAvailableModels([]);
+    setSelectedModels(new Set());
+    setModelQuery('');
+    setModelPickerMode(null);
+  }
+
+  const configuredModels = parseModels(form.models);
+  const pickerModels = modelPickerMode === 'remove' ? configuredModels : availableModels;
+  const visibleModels = pickerModels.filter((model) =>
     model.toLocaleLowerCase().includes(modelQuery.trim().toLocaleLowerCase()),
   );
+  const selectedModelCount = pickerModels.filter((model) => selectedModels.has(model)).length;
 
   return (
     <div className="max-w-5xl">
@@ -253,7 +306,7 @@ export function ChannelsPage() {
                     </div>
                   </td>
                   <td className="px-4 py-3.5 font-mono text-ink-soft">{ch.priority}</td>
-                  <td className="px-4 py-3.5">
+                  <td className="px-4 py-3.5 whitespace-nowrap">
                     <StatusBadge enabled={ch.status === 1} />
                   </td>
                   <td className="px-6 py-3.5 text-right">
@@ -326,7 +379,11 @@ export function ChannelsPage() {
               <Input
                 type="number"
                 value={form.priority}
-                onChange={(e) => setForm({ ...form, priority: Number(e.target.value) })}
+                placeholder="0"
+                onChange={(e) => {
+                  const priority = e.target.value === '' ? '' : Number(e.target.value);
+                  setForm((current) => ({ ...current, priority }));
+                }}
               />
             </Field>
           </div>
@@ -357,8 +414,8 @@ export function ChannelsPage() {
               autoComplete="new-password"
             />
           </Field>
-          <Field label="支持的模型" hint="用英文逗号分隔；也可以点右侧按钮从上游自动获取">
-            <div className="flex gap-2">
+          <Field label="支持的模型" hint="用英文逗号分隔；可以从上游获取新模型，或清理现有模型">
+            <div className="flex flex-col gap-2 sm:flex-row">
               <Input
                 value={form.models}
                 onChange={(e) => setForm({ ...form, models: e.target.value })}
@@ -366,27 +423,41 @@ export function ChannelsPage() {
                 required
                 className="flex-1"
               />
-              <Button
-                type="button"
-                variant="soft"
-                className="shrink-0 px-3 text-xs"
-                disabled={fetchingModels}
-                onClick={fetchModels}
-              >
-                <DownloadSimpleIcon size={14} weight="bold" />
-                {fetchingModels ? '获取中…' : '获取模型'}
-              </Button>
+              <div className="flex shrink-0 gap-2">
+                <Button
+                  type="button"
+                  variant="soft"
+                  className="flex-1 px-3 text-xs sm:flex-none"
+                  disabled={fetchingModels}
+                  onClick={fetchModels}
+                >
+                  <DownloadSimpleIcon size={14} weight="bold" />
+                  {fetchingModels ? '获取中…' : '一键获取模型'}
+                </Button>
+                <Button
+                  type="button"
+                  variant="danger"
+                  className="flex-1 px-3 text-xs sm:flex-none"
+                  disabled={configuredModels.length === 0}
+                  onClick={openModelCleanup}
+                >
+                  <TrashIcon size={14} weight="bold" />
+                  清理模型
+                </Button>
+              </div>
             </div>
           </Field>
-          {availableModels.length > 0 && (
+          {modelPickerMode !== null && pickerModels.length > 0 && (
             <section className="rounded-2xl border border-sakura-100 bg-sakura-50/60 p-3 dark:border-white/10 dark:bg-sakura-500/5">
               <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
-                <span className="text-sm font-bold text-ink">选择要加入的模型</span>
-                <div className="flex gap-2 text-xs font-bold">
+                <span className="text-sm font-bold text-ink">
+                  {modelPickerMode === 'remove' ? '选择要移除的模型' : '选择要加入的模型'}
+                </span>
+                <div className="flex items-center gap-2 text-xs font-bold">
                   <button
                     type="button"
                     className="text-sakura-600 hover:text-sakura-700 dark:text-sakura-300"
-                    onClick={() => setSelectedModels(new Set(availableModels))}
+                    onClick={() => setSelectedModels(new Set(pickerModels))}
                   >
                     全选
                   </button>
@@ -396,6 +467,14 @@ export function ChannelsPage() {
                     onClick={() => setSelectedModels(new Set())}
                   >
                     清空
+                  </button>
+                  <button
+                    type="button"
+                    aria-label="关闭模型选择"
+                    className="rounded-full p-1 text-ink-soft transition hover:bg-surface hover:text-ink"
+                    onClick={closeModelPicker}
+                  >
+                    <XIcon size={14} weight="bold" />
                   </button>
                 </div>
               </div>
@@ -428,12 +507,12 @@ export function ChannelsPage() {
               </div>
               <Button
                 type="button"
-                variant="soft"
+                variant={modelPickerMode === 'remove' ? 'danger' : 'soft'}
                 className="mt-2 w-full text-xs"
-                disabled={selectedModels.size === 0}
-                onClick={addSelectedModels}
+                disabled={selectedModelCount === 0}
+                onClick={modelPickerMode === 'remove' ? removeSelectedModels : addSelectedModels}
               >
-                加入已选模型（{selectedModels.size}）
+                {modelPickerMode === 'remove' ? '移除' : '加入'}已选模型（{selectedModelCount}）
               </Button>
             </section>
           )}

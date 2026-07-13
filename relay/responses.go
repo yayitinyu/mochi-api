@@ -457,6 +457,77 @@ func (s *responseStream) finish(u usage, reasoningTokens int) {
 	s.emit(gin.H{"type": eventType, "response": response})
 }
 
+func streamOpenAIToResponses(rc *relayContext, resp *http.Response) usage {
+	setSSEHeaders(rc.c)
+	stream := newResponseStream(rc)
+	var u usage
+	reasoningTokens := 0
+	type toolCallState struct {
+		id, name, signature string
+		arguments           strings.Builder
+	}
+	var toolCalls []*toolCallState
+
+	scanSSE(resp.Body, func(line string) {
+		payload, ok := strings.CutPrefix(line, "data:")
+		if !ok {
+			return
+		}
+		payload = strings.TrimSpace(payload)
+		if payload == "" || payload == "[DONE]" {
+			return
+		}
+		event := gjson.Parse(payload)
+		if usageField := event.Get("usage"); usageField.IsObject() {
+			u.prompt = int(usageField.Get("prompt_tokens").Int())
+			u.completion = int(usageField.Get("completion_tokens").Int())
+			reasoningTokens = int(usageField.Get("completion_tokens_details.reasoning_tokens").Int())
+		}
+		for _, choice := range event.Get("choices").Array() {
+			delta := choice.Get("delta")
+			reasoning := delta.Get("reasoning_content").String()
+			signature := delta.Get("extra_content.google.thought_signature").String()
+			if reasoning != "" || signature != "" {
+				stream.addReasoning(reasoning, signature)
+			}
+			stream.addText(delta.Get("content").String())
+			for _, call := range delta.Get("tool_calls").Array() {
+				index := int(call.Get("index").Int())
+				for len(toolCalls) <= index {
+					toolCalls = append(toolCalls, nil)
+				}
+				state := toolCalls[index]
+				if state == nil {
+					state = &toolCallState{}
+					toolCalls[index] = state
+				}
+				if id := call.Get("id").String(); id != "" {
+					state.id = id
+				}
+				state.name += call.Get("function.name").String()
+				state.arguments.WriteString(call.Get("function.arguments").String())
+				if signature := call.Get("extra_content.google.thought_signature").String(); signature != "" {
+					state.signature = signature
+				}
+			}
+			if choice.Get("finish_reason").String() == "length" {
+				stream.finishIncomplete = true
+			}
+		}
+	})
+	for _, call := range toolCalls {
+		if call != nil {
+			stream.addFunctionCall(call.id, call.name, call.arguments.String(), call.signature)
+		}
+	}
+	if u.completion == 0 {
+		u.completion = estimateTokens(stream.messageText.String()) + estimateTokens(stream.reasoningText.String())
+		u.estimated = true
+	}
+	stream.finish(u, reasoningTokens)
+	return u
+}
+
 func streamGeminiToResponses(rc *relayContext, resp *http.Response) usage {
 	setSSEHeaders(rc.c)
 	stream := newResponseStream(rc)

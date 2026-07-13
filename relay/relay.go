@@ -109,7 +109,7 @@ func Handle(c *gin.Context, clientFormat Format) {
 		return
 	}
 
-	resp, err := sendUpstream(rc, upstreamBody)
+	resp, err := sendUpstreamWithResponsesFallback(rc, body, upstreamBody)
 	if err != nil {
 		recordRelayLog(rc, usage{}, http.StatusBadGateway)
 		writeError(c, clientFormat, http.StatusBadGateway, "api_error", "上游请求失败: "+err.Error())
@@ -202,6 +202,62 @@ func sendUpstream(rc *relayContext, body []byte) (*http.Response, error) {
 	return httpClient.Do(req)
 }
 
+// sendUpstreamWithResponsesFallback retries a portable Responses request via
+// Chat Completions only when an OpenAI-compatible upstream explicitly reports
+// that its Responses method is unsupported.
+func sendUpstreamWithResponsesFallback(
+	rc *relayContext,
+	clientBody, upstreamBody []byte,
+) (*http.Response, error) {
+	resp, err := sendUpstream(rc, upstreamBody)
+	if err != nil || resp.StatusCode == http.StatusOK ||
+		rc.clientFormat != FormatResponses || rc.upstreamFormat != FormatResponses ||
+		rc.channel.Type != model.ChannelTypeOpenAI {
+		return resp, err
+	}
+
+	originalBody := resp.Body
+	errorBody, readErr := io.ReadAll(originalBody)
+	_ = originalBody.Close()
+	resp.Body = io.NopCloser(bytes.NewReader(errorBody))
+	if readErr != nil {
+		return resp, nil
+	}
+	if !isUnsupportedResponsesError(resp.StatusCode, errorBody) {
+		return resp, nil
+	}
+
+	rc.upstreamFormat = FormatOpenAI
+	fallbackBody, prepareErr := prepareUpstreamBody(rc, clientBody)
+	if prepareErr != nil {
+		rc.upstreamFormat = FormatResponses
+		return resp, nil
+	}
+	_ = resp.Body.Close()
+	return sendUpstream(rc, fallbackBody)
+}
+
+func isUnsupportedResponsesError(status int, body []byte) bool {
+	switch status {
+	case http.StatusBadRequest, http.StatusNotFound, http.StatusMethodNotAllowed,
+		http.StatusUnprocessableEntity, http.StatusNotImplemented:
+	default:
+		return false
+	}
+	message := gjson.GetBytes(body, "error.message").String()
+	if message == "" {
+		message = string(body)
+	}
+	message = strings.ToLower(message)
+	mentionsResponses := strings.Contains(message, "responses") || strings.Contains(message, "/v1/responses")
+	unsupported := strings.Contains(message, "does not support") ||
+		strings.Contains(message, "not supported") ||
+		strings.Contains(message, "unsupported") ||
+		strings.Contains(message, "not implemented") ||
+		strings.Contains(message, "unknown endpoint")
+	return mentionsResponses && unsupported
+}
+
 // upstreamTarget returns the request URL and auth header for the channel.
 func upstreamTarget(rc *relayContext) (url, headerKey, headerVal string) {
 	switch rc.upstreamFormat {
@@ -245,6 +301,9 @@ func dispatchStream(rc *relayContext, resp *http.Response) usage {
 		if rc.clientFormat == FormatClaude {
 			return streamOpenAIToClaude(rc, resp)
 		}
+		if rc.clientFormat == FormatResponses {
+			return streamOpenAIToResponses(rc, resp)
+		}
 		return streamOpenAIToOpenAI(rc, resp)
 	}
 }
@@ -287,9 +346,9 @@ func dispatchNonStream(rc *relayContext, resp *http.Response) usage {
 	if rc.clientFormat == FormatResponses {
 		if rc.upstreamFormat == FormatClaude {
 			body, err = convertResponseClaudeToOpenAI(body)
-			if err == nil {
-				body, err = convertResponseOpenAIToResponses(body)
-			}
+		}
+		if err == nil {
+			body, err = convertResponseOpenAIToResponses(body)
 		}
 		if err != nil {
 			writeError(rc.c, rc.clientFormat, http.StatusBadGateway, "api_error", "响应转换失败")

@@ -1,4 +1,4 @@
-import { useState, type ReactNode } from 'react';
+import { useState, useEffect, type ReactNode } from 'react';
 import { ListIcon, XIcon } from '@phosphor-icons/react';
 import { Sidebar } from './Sidebar';
 import { Logo } from './Logo';
@@ -6,10 +6,30 @@ import { Logo } from './Logo';
 export function Layout({ title, children }: { title: string; children: ReactNode }) {
   const [drawerOpen, setDrawerOpen] = useState(false);
 
+  useEffect(() => {
+    if (drawerOpen) {
+      document.body.style.overflow = 'hidden';
+    } else {
+      document.body.style.overflow = '';
+    }
+
+    const handleResize = () => {
+      if (window.innerWidth >= 768) {
+        setDrawerOpen(false);
+      }
+    };
+
+    window.addEventListener('resize', handleResize);
+    return () => {
+      document.body.style.overflow = '';
+      window.removeEventListener('resize', handleResize);
+    };
+  }, [drawerOpen]);
+
   return (
     <div className="min-h-[100dvh] md:flex">
       {/* Static sidebar on desktop */}
-      <div className="hidden md:block">
+      <div className="hidden md:block h-screen sticky top-0 overflow-y-auto">
         <Sidebar />
       </div>
 
