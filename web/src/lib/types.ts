@@ -1,9 +1,30 @@
 export const ROLE_ADMIN = 10;
+export const ROLE_USER = 1;
+export const STATUS_ENABLED = 1;
+export const STATUS_DISABLED = 2;
 
 export interface User {
   id: number;
   username: string;
   role: number;
+  status: number;
+  created_at: number;
+}
+
+export type RegisterMode = 'open' | 'invite' | 'closed';
+
+export interface SiteStatus {
+  register_mode: RegisterMode;
+}
+
+export interface InviteCode {
+  id: number;
+  code: string;
+  created_by: number;
+  created_at: number;
+  used_by_user_id: number;
+  used_at: number;
+  used_by_username: string;
 }
 
 export interface Token {
@@ -71,6 +92,15 @@ export interface DailyStat {
 
 export interface ModelStat {
   model_name: string;
+  requests: number;
+  prompt_tokens: number;
+  completion_tokens: number;
+  cost_micros: number;
+}
+
+export interface UserStat {
+  user_id: number;
+  username: string;
   requests: number;
   prompt_tokens: number;
   completion_tokens: number;

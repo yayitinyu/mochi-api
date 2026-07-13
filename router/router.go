@@ -44,6 +44,8 @@ func relayCORS() gin.HandlerFunc {
 func SetApiRouter(r *gin.Engine) {
 	api := r.Group("/api")
 
+	api.GET("/status", controller.PublicStatus)
+
 	auth := api.Group("/auth")
 	{
 		auth.POST("/register", controller.Register)
@@ -78,5 +80,18 @@ func SetApiRouter(r *gin.Engine) {
 		admin.POST("/prices", controller.CreatePrice)
 		admin.PUT("/prices/:id", controller.UpdatePrice)
 		admin.DELETE("/prices/:id", controller.DeletePrice)
+
+		admin.GET("/users", controller.ListUsers)
+		admin.PUT("/users/:id", controller.UpdateUser)
+		admin.DELETE("/users/:id", controller.DeleteUser)
+
+		admin.GET("/invites", controller.ListInvites)
+		admin.POST("/invites", controller.CreateInvites)
+		admin.DELETE("/invites/:id", controller.DeleteInvite)
+
+		admin.GET("/settings", controller.GetSettings)
+		admin.PUT("/settings", controller.UpdateSettings)
+
+		admin.GET("/stats/users", controller.StatsUsers)
 	}
 }

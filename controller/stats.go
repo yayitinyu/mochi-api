@@ -62,3 +62,17 @@ func StatsModels(c *gin.Context) {
 	}
 	respondData(c, stats)
 }
+
+// StatsUsers returns per-user usage totals; admin only (enforced by routing).
+func StatsUsers(c *gin.Context) {
+	days, _ := strconv.Atoi(c.DefaultQuery("days", "30"))
+	if days < 1 || days > 731 {
+		days = 30
+	}
+	stats, err := model.GetUserStats(days)
+	if err != nil {
+		respondError(c, http.StatusInternalServerError, "数据库错误")
+		return
+	}
+	respondData(c, stats)
+}

@@ -19,12 +19,20 @@ func InitDB() error {
 		return err
 	}
 	DB = db
-	return DB.AutoMigrate(
+	if err := DB.AutoMigrate(
 		&User{},
 		&Token{},
 		&Channel{},
 		&ModelPrice{},
 		&Log{},
 		&Option{},
-	)
+		&InviteCode{},
+	); err != nil {
+		return err
+	}
+	// Rows that existed before the status column was added may hold the
+	// zero value instead of the column default; normalize them once.
+	return DB.Model(&User{}).
+		Where("status IS NULL OR status = 0").
+		Update("status", StatusEnabled).Error
 }

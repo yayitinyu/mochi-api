@@ -1,6 +1,7 @@
 package controller
 
 import (
+	"errors"
 	"net/http"
 	"strings"
 	"time"
@@ -13,8 +14,9 @@ import (
 )
 
 type authRequest struct {
-	Username string `json:"username"`
-	Password string `json:"password"`
+	Username   string `json:"username"`
+	Password   string `json:"password"`
+	InviteCode string `json:"invite_code"`
 }
 
 func respondError(c *gin.Context, status int, message string) {
@@ -55,6 +57,24 @@ func Register(c *gin.Context) {
 		respondError(c, http.StatusInternalServerError, "数据库错误")
 		return
 	}
+	// The first user bootstraps the instance: they become admin and
+	// bypass the register mode so a pre-configured "closed" setting
+	// cannot lock a fresh deployment out.
+	registerMode := model.RegisterModeOpen
+	if count > 0 {
+		registerMode = model.GetRegisterMode()
+	}
+	req.InviteCode = strings.TrimSpace(req.InviteCode)
+	switch registerMode {
+	case model.RegisterModeClosed:
+		respondError(c, http.StatusForbidden, "注册已关闭")
+		return
+	case model.RegisterModeInvite:
+		if req.InviteCode == "" {
+			respondError(c, http.StatusBadRequest, "需要邀请码")
+			return
+		}
+	}
 	hash, err := common.HashPassword(req.Password)
 	if err != nil {
 		respondError(c, http.StatusInternalServerError, "密码处理失败")
@@ -68,14 +88,24 @@ func Register(c *gin.Context) {
 		Username:  req.Username,
 		Password:  hash,
 		Role:      role,
+		Status:    model.StatusEnabled,
 		CreatedAt: time.Now().Unix(),
 	}
-	if err := model.CreateUser(user); err != nil {
+	if registerMode == model.RegisterModeInvite {
+		err = model.CreateUserWithInvite(user, req.InviteCode)
+	} else {
+		err = model.CreateUser(user)
+	}
+	if err != nil {
+		if errors.Is(err, model.ErrInviteInvalid) {
+			respondError(c, http.StatusBadRequest, "邀请码无效或已被使用")
+			return
+		}
 		respondError(c, http.StatusInternalServerError, "创建用户失败")
 		return
 	}
 	setLoginSession(c, user)
-	respondData(c, gin.H{"id": user.Id, "username": user.Username, "role": user.Role})
+	respondData(c, user)
 }
 
 func Login(c *gin.Context) {
@@ -93,8 +123,12 @@ func Login(c *gin.Context) {
 		respondError(c, http.StatusUnauthorized, "用户名或密码错误")
 		return
 	}
+	if user.Status != model.StatusEnabled {
+		respondError(c, http.StatusForbidden, "账号已被禁用")
+		return
+	}
 	setLoginSession(c, user)
-	respondData(c, gin.H{"id": user.Id, "username": user.Username, "role": user.Role})
+	respondData(c, user)
 }
 
 func Logout(c *gin.Context) {
@@ -110,7 +144,7 @@ func Me(c *gin.Context) {
 		respondError(c, http.StatusUnauthorized, "用户不存在")
 		return
 	}
-	respondData(c, gin.H{"id": user.Id, "username": user.Username, "role": user.Role})
+	respondData(c, user)
 }
 
 func setLoginSession(c *gin.Context, user *model.User) {

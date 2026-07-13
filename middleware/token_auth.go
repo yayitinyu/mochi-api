@@ -37,6 +37,15 @@ func TokenAuth(claudeStyle bool) gin.HandlerFunc {
 			abortRelay(c, claudeStyle, http.StatusUnauthorized, "该 API 密钥已被禁用")
 			return
 		}
+		enabled, err := model.IsUserEnabled(token.UserId)
+		if err != nil {
+			abortRelay(c, claudeStyle, http.StatusInternalServerError, "数据库错误")
+			return
+		}
+		if !enabled {
+			abortRelay(c, claudeStyle, http.StatusUnauthorized, "该账号已被禁用")
+			return
+		}
 		c.Set("user_id", token.UserId)
 		c.Set("token_name", token.Name)
 		c.Next()

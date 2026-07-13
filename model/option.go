@@ -13,6 +13,30 @@ type Option struct {
 	Value string `json:"value"`
 }
 
+const (
+	OptionRegisterMode = "register_mode"
+
+	RegisterModeOpen   = "open"
+	RegisterModeInvite = "invite"
+	RegisterModeClosed = "closed"
+)
+
+// GetRegisterMode returns the current registration mode. Missing,
+// invalid, or unreadable values fall back to open so that existing
+// deployments keep their pre-option behavior.
+func GetRegisterMode() string {
+	value, err := GetOption(OptionRegisterMode)
+	if err != nil {
+		return RegisterModeOpen
+	}
+	switch value {
+	case RegisterModeInvite, RegisterModeClosed:
+		return value
+	default:
+		return RegisterModeOpen
+	}
+}
+
 // GetOption returns the stored value for key, or "" when absent.
 func GetOption(key string) (string, error) {
 	var opt Option

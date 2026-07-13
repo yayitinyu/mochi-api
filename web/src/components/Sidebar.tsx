@@ -2,6 +2,7 @@ import { useState } from 'react';
 import { NavLink, useNavigate } from 'react-router-dom';
 import {
   ChartLineUpIcon,
+  GearSixIcon,
   KeyIcon,
   MoonIcon,
   PlugsConnectedIcon,
@@ -9,6 +10,7 @@ import {
   ScrollIcon,
   SignOutIcon,
   SunIcon,
+  UsersIcon,
   type Icon,
 } from '@phosphor-icons/react';
 import { useAuth } from '../context/AuthContext';
@@ -28,6 +30,8 @@ const items: NavItem[] = [
   { to: '/logs', label: '调用日志', icon: ScrollIcon },
   { to: '/channels', label: '渠道管理', icon: PlugsConnectedIcon, adminOnly: true },
   { to: '/prices', label: '模型价格', icon: TagIcon, adminOnly: true },
+  { to: '/users', label: '用户管理', icon: UsersIcon, adminOnly: true },
+  { to: '/settings', label: '站点设置', icon: GearSixIcon, adminOnly: true },
 ];
 
 export function Sidebar({ onNavigate }: { onNavigate?: () => void }) {

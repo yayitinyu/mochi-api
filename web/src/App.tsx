@@ -9,6 +9,8 @@ import { KeysPage } from './pages/KeysPage';
 import { LogsPage } from './pages/LogsPage';
 import { ChannelsPage } from './pages/ChannelsPage';
 import { PricesPage } from './pages/PricesPage';
+import { UsersPage } from './pages/UsersPage';
+import { SettingsPage } from './pages/SettingsPage';
 import type { ReactNode } from 'react';
 
 function Loading() {
@@ -81,6 +83,26 @@ function Router() {
           <Guard admin>
             <Layout title="模型价格">
               <PricesPage />
+            </Layout>
+          </Guard>
+        }
+      />
+      <Route
+        path="/users"
+        element={
+          <Guard admin>
+            <Layout title="用户管理">
+              <UsersPage />
+            </Layout>
+          </Guard>
+        }
+      />
+      <Route
+        path="/settings"
+        element={
+          <Guard admin>
+            <Layout title="站点设置">
+              <SettingsPage />
             </Layout>
           </Guard>
         }
