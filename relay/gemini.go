@@ -1,6 +1,7 @@
 package relay
 
 import (
+	"encoding/base64"
 	"encoding/json"
 	"net/http"
 	"strings"
@@ -35,16 +36,20 @@ func convertRequestOpenAIToGemini(body []byte) ([]byte, error) {
 				systemParts = append(systemParts, map[string]any{"text": text})
 			}
 		case "tool":
+			toolCallID := msg.Get("tool_call_id").String()
 			name := msg.Get("name").String()
 			if name == "" {
-				name = toolNames[msg.Get("tool_call_id").String()]
+				name = toolNames[toolCallID]
+			}
+			if name == "" {
+				name, _ = decodeToolCallID(toolCallID)
 			}
 			contents = append(contents, map[string]any{
 				"role": "user",
 				"parts": []any{map[string]any{
 					"functionResponse": map[string]any{
 						"name":     name,
-						"id":       msg.Get("tool_call_id").String(),
+						"id":       toolCallID,
 						"response": map[string]any{"content": contentText(msg.Get("content"))},
 					},
 				}},
@@ -70,16 +75,25 @@ func convertRequestOpenAIToGemini(body []byte) ([]byte, error) {
 				if s := tc.Get("function.arguments").String(); s != "" {
 					_ = json.Unmarshal([]byte(s), &args)
 				}
+				tcID := tc.Get("id").String()
+				name, signature := decodeToolCallID(tcID)
+				if name == "" {
+					name = tc.Get("function.name").String()
+				}
 				functionCall := map[string]any{
-					"name": tc.Get("function.name").String(),
-					"args": args, "id": tc.Get("id").String(),
+					"name": name,
+					"args": args,
+					"id":   tcID,
 				}
 				part := map[string]any{"functionCall": functionCall}
-				if signature := tc.Get("extra_content.google.thought_signature").String(); signature != "" {
+				if signature == "" {
+					signature = tc.Get("extra_content.google.thought_signature").String()
+				}
+				if signature != "" {
 					part["thoughtSignature"] = signature
 				}
 				parts = append(parts, part)
-				toolNames[tc.Get("id").String()] = tc.Get("function.name").String()
+				toolNames[tcID] = name
 			}
 			if len(parts) > 0 {
 				contents = append(contents, map[string]any{"role": "model", "parts": parts})
@@ -304,19 +318,21 @@ func geminiCandidateToOpenAI(candidate gjson.Result) (string, string, []map[stri
 		}
 		if fc := part.Get("functionCall"); fc.Exists() {
 			args, _ := json.Marshal(fc.Get("args").Value())
+			name := fc.Get("name").String()
+			signature := part.Get("thoughtSignature").String()
 			callID := fc.Get("id").String()
 			if callID == "" {
-				callID = "call_" + common.GenerateKey(16)
+				callID = encodeToolCallID(name, signature)
 			}
 			call := map[string]any{
 				"id":   callID,
 				"type": "function",
 				"function": map[string]any{
-					"name":      fc.Get("name").String(),
+					"name":      name,
 					"arguments": string(args),
 				},
 			}
-			if signature := part.Get("thoughtSignature").String(); signature != "" {
+			if signature != "" {
 				call["extra_content"] = map[string]any{"google": map[string]any{"thought_signature": signature}}
 			}
 			toolCalls = append(toolCalls, call)
@@ -408,19 +424,21 @@ func streamGeminiToOpenAI(rc *relayContext, resp *http.Response) usage {
 			}
 			if fc := part.Get("functionCall"); fc.Exists() {
 				args, _ := json.Marshal(fc.Get("args").Value())
+				name := fc.Get("name").String()
+				signature := part.Get("thoughtSignature").String()
 				callID := fc.Get("id").String()
 				if callID == "" {
-					callID = "call_" + common.GenerateKey(16)
+					callID = encodeToolCallID(name, signature)
 				}
 				call := gin.H{
 					"index": toolIndex,
 					"id":    callID,
 					"type":  "function",
 					"function": gin.H{
-						"name": fc.Get("name").String(), "arguments": string(args),
+						"name": name, "arguments": string(args),
 					},
 				}
-				if signature := part.Get("thoughtSignature").String(); signature != "" {
+				if signature != "" {
 					call["extra_content"] = gin.H{"google": gin.H{"thought_signature": signature}}
 				}
 				writeOpenAIChunkData(rc, openAIChunk(id, created, rc.modelName, gin.H{
@@ -579,3 +597,29 @@ func streamGeminiToClaude(rc *relayContext, resp *http.Response) usage {
 	writeClaudeEvent(rc, "message_stop", gin.H{"type": "message_stop"})
 	return u
 }
+
+// encodeToolCallID packages the function name and thought signature into a single
+// OpenAI-compatible tool call ID. Standard clients will echo this ID back to us.
+func encodeToolCallID(name, signature string) string {
+	data := name + "|" + signature
+	encoded := base64.RawURLEncoding.EncodeToString([]byte(data))
+	return "call_" + encoded
+}
+
+// decodeToolCallID extracts the function name and thought signature from an encoded ID.
+func decodeToolCallID(id string) (string, string) {
+	if !strings.HasPrefix(id, "call_") {
+		return "", ""
+	}
+	encoded := strings.TrimPrefix(id, "call_")
+	decodedBytes, err := base64.RawURLEncoding.DecodeString(encoded)
+	if err != nil {
+		return "", ""
+	}
+	parts := strings.SplitN(string(decodedBytes), "|", 2)
+	if len(parts) == 2 {
+		return parts[0], parts[1]
+	}
+	return "", ""
+}
+

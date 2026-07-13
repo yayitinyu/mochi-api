@@ -272,3 +272,53 @@ func TestGeminiThoughtsStreamAsChatReasoningContent(t *testing.T) {
 	require.Contains(t, body, `"reasoning_tokens":3`)
 	require.Equal(t, 5, gotUsage.completion)
 }
+
+func TestGeminiToolCallEncodingAndSignaturePreservation(t *testing.T) {
+	// 1. Simulate a Gemini response containing a tool call and a thought signature
+	geminiResponse := []byte(`{
+		"candidates":[{"content":{"parts":[
+			{"functionCall":{"name":"default_api:web_search","args":{"query":"weather in Tokyo"}},"thoughtSignature":"my-thought-sig-123"}
+		]},"finishReason":"STOP"}],
+		"usageMetadata":{"promptTokenCount":10,"candidatesTokenCount":5}
+	}`)
+
+	openaiResponseBytes, err := convertResponseGeminiToOpenAI(geminiResponse, "gemini-3-flash-preview")
+	require.NoError(t, err)
+
+	toolCallID := gjson.GetBytes(openaiResponseBytes, "choices.0.message.tool_calls.0.id").String()
+	require.True(t, strings.HasPrefix(toolCallID, "call_"))
+
+	// 2. Simulate the client sending this tool call and the tool execution result back in the next turn
+	clientRequest := []byte(`{
+		"model": "gemini-3-flash-preview",
+		"messages": [
+			{
+				"role": "assistant",
+				"tool_calls": [
+					{
+						"id": "` + toolCallID + `",
+						"type": "function",
+						"function": {
+							"name": "default_api:web_search",
+							"arguments": "{\"query\":\"weather in Tokyo\"}"
+						}
+					}
+				]
+			},
+			{
+				"role": "tool",
+				"tool_call_id": "` + toolCallID + `",
+				"content": "Tokyo weather is sunny."
+			}
+		]
+	}`)
+
+	convertedRequestBytes, err := convertRequestOpenAIToGemini(clientRequest)
+	require.NoError(t, err)
+
+	// Verify that the assistant message part successfully restored the thoughtSignature
+	require.Equal(t, "my-thought-sig-123", gjson.GetBytes(convertedRequestBytes, "contents.0.parts.0.thoughtSignature").String())
+	// Verify that the tool response part successfully resolved the name even if "name" is missing in OpenAI tool message
+	require.Equal(t, "default_api:web_search", gjson.GetBytes(convertedRequestBytes, "contents.1.parts.0.functionResponse.name").String())
+}
+
