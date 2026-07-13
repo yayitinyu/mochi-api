@@ -4,6 +4,7 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"net/http"
+	"os"
 	"strings"
 	"time"
 
@@ -21,6 +22,11 @@ import (
 // --- request: OpenAI -> Gemini ---
 
 func convertRequestOpenAIToGemini(body []byte) ([]byte, error) {
+	f, _ := os.OpenFile("debug.log", os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
+	if f != nil {
+		_, _ = f.WriteString("\n=== REQUEST START ===\n" + string(body) + "\n")
+		defer f.Close()
+	}
 	root := gjson.ParseBytes(body)
 	out := map[string]any{}
 
@@ -190,8 +196,13 @@ func convertRequestOpenAIToGemini(body []byte) ([]byte, error) {
 		out["toolConfig"] = map[string]any{"functionCallingConfig": config}
 	}
 
-	return json.Marshal(out)
+	converted, err := json.Marshal(out)
+	if f != nil && err == nil {
+		_, _ = f.WriteString("=== GEMINI REQ ===\n" + string(converted) + "\n=== END ===\n")
+	}
+	return converted, err
 }
+
 
 // sanitizeGeminiSchema removes JSON Schema keywords that Gemini's
 // FunctionDeclaration.parameters field does not accept. OpenAI-compatible
