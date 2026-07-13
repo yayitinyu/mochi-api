@@ -4,7 +4,6 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"net/http"
-	"os"
 	"strings"
 	"time"
 
@@ -22,11 +21,6 @@ import (
 // --- request: OpenAI -> Gemini ---
 
 func convertRequestOpenAIToGemini(body []byte) ([]byte, error) {
-	f, _ := os.OpenFile("debug.log", os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
-	if f != nil {
-		_, _ = f.WriteString("\n=== REQUEST START ===\n" + string(body) + "\n")
-		defer f.Close()
-	}
 	root := gjson.ParseBytes(body)
 	out := map[string]any{}
 
@@ -35,7 +29,21 @@ func convertRequestOpenAIToGemini(body []byte) ([]byte, error) {
 	toolNames := map[string]string{}
 
 	for _, msg := range root.Get("messages").Array() {
+		if msg.Get("role").String() == "assistant" {
+			for _, tc := range msg.Get("tool_calls").Array() {
+				tcID := tc.Get("id").String()
+				name, _ := decodeToolCallID(tcID)
+				if name == "" {
+					name = tc.Get("function.name").String()
+				}
+				toolNames[tcID] = name
+			}
+		}
+	}
+
+	for _, msg := range root.Get("messages").Array() {
 		role := msg.Get("role").String()
+
 		switch role {
 		case "system", "developer":
 			if text := contentText(msg.Get("content")); text != "" {
@@ -50,16 +58,36 @@ func convertRequestOpenAIToGemini(body []byte) ([]byte, error) {
 			if name == "" {
 				name, _ = decodeToolCallID(toolCallID)
 			}
-			contents = append(contents, map[string]any{
-				"role": "user",
-				"parts": []any{map[string]any{
-					"functionResponse": map[string]any{
-						"name":     name,
-						"id":       toolCallID,
-						"response": map[string]any{"content": contentText(msg.Get("content"))},
-					},
-				}},
-			})
+			fnResp := map[string]any{
+				"functionResponse": map[string]any{
+					"name":     name,
+					"id":       toolCallID,
+					"response": map[string]any{"content": contentText(msg.Get("content"))},
+				},
+			}
+
+			appended := false
+			if len(contents) > 0 {
+				lastIdx := len(contents) - 1
+				lastContent := contents[lastIdx]
+				if lastContent["role"] == "user" {
+					if parts, ok := lastContent["parts"].([]any); ok && len(parts) > 0 {
+						if firstPart, ok := parts[0].(map[string]any); ok {
+							if _, hasFn := firstPart["functionResponse"]; hasFn {
+								contents[lastIdx]["parts"] = append(parts, fnResp)
+								appended = true
+							}
+						}
+					}
+				}
+			}
+
+			if !appended {
+				contents = append(contents, map[string]any{
+					"role":  "user",
+					"parts": []any{fnResp},
+				})
+			}
 		case "assistant":
 			var parts []any
 			if reasoning := msg.Get("reasoning_content").String(); reasoning != "" {
@@ -101,15 +129,54 @@ func convertRequestOpenAIToGemini(body []byte) ([]byte, error) {
 				parts = append(parts, part)
 				toolNames[tcID] = name
 			}
+
 			if len(parts) > 0 {
-				contents = append(contents, map[string]any{"role": "model", "parts": parts})
+				appended := false
+				if len(contents) > 0 {
+					lastIdx := len(contents) - 1
+					lastContent := contents[lastIdx]
+					if lastContent["role"] == "model" {
+						if partsExisting, ok := lastContent["parts"].([]any); ok {
+							contents[lastIdx]["parts"] = append(partsExisting, parts...)
+							appended = true
+						}
+					}
+				}
+				if !appended {
+					contents = append(contents, map[string]any{"role": "model", "parts": parts})
+				}
 			}
 		default: // user
-			contents = append(contents, map[string]any{
-				"role":  "user",
-				"parts": openAIContentToGeminiParts(msg.Get("content")),
-			})
+			userParts := openAIContentToGeminiParts(msg.Get("content"))
+			appended := false
+			if len(contents) > 0 {
+				lastIdx := len(contents) - 1
+				lastContent := contents[lastIdx]
+				if lastContent["role"] == "user" {
+					if parts, ok := lastContent["parts"].([]any); ok {
+						isToolResp := false
+						if len(parts) > 0 {
+							if firstPart, ok := parts[0].(map[string]any); ok {
+								if _, hasFn := firstPart["functionResponse"]; hasFn {
+									isToolResp = true
+								}
+							}
+						}
+						if !isToolResp {
+							contents[lastIdx]["parts"] = append(parts, userParts...)
+							appended = true
+						}
+					}
+				}
+			}
+			if !appended {
+				contents = append(contents, map[string]any{
+					"role":  "user",
+					"parts": userParts,
+				})
+			}
 		}
+
 	}
 	out["contents"] = contents
 	if len(systemParts) > 0 {
@@ -196,12 +263,9 @@ func convertRequestOpenAIToGemini(body []byte) ([]byte, error) {
 		out["toolConfig"] = map[string]any{"functionCallingConfig": config}
 	}
 
-	converted, err := json.Marshal(out)
-	if f != nil && err == nil {
-		_, _ = f.WriteString("=== GEMINI REQ ===\n" + string(converted) + "\n=== END ===\n")
-	}
-	return converted, err
+	return json.Marshal(out)
 }
+
 
 
 // sanitizeGeminiSchema removes JSON Schema keywords that Gemini's

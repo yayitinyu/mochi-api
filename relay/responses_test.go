@@ -344,4 +344,50 @@ func TestGeminiToolCallStreamAccumulatesThoughtSignature(t *testing.T) {
 	require.Contains(t, body, `"thought_signature":"sig-123"`)
 }
 
+func TestGeminiMessageGrouping(t *testing.T) {
+	body := []byte(`{
+		"model": "gemini-3-flash-preview",
+		"messages": [
+			{"role": "user", "content": "hello"},
+			{"role": "user", "content": "world"},
+			{
+				"role": "assistant",
+				"tool_calls": [
+					{"id": "call-1", "type": "function", "function": {"name": "search", "arguments": "{}"}}
+				]
+			},
+			{
+				"role": "assistant",
+				"content": "thinking..."
+			},
+			{"role": "tool", "tool_call_id": "call-1", "content": "result 1"},
+			{"role": "tool", "tool_call_id": "call-1", "content": "result 2"}
+		]
+	}`)
+
+	converted, err := convertRequestOpenAIToGemini(body)
+	require.NoError(t, err)
+
+	// Verify that there are only 3 contents in the converted request (User -> Model -> User)
+	contentsResult := gjson.GetBytes(converted, "contents")
+	require.Equal(t, int64(3), contentsResult.Get("#").Int())
+
+	// contents[0] (User): has 2 parts ("hello" and "world")
+	require.Equal(t, "user", contentsResult.Get("0.role").String())
+	require.Equal(t, int64(2), contentsResult.Get("0.parts.#").Int())
+	require.Equal(t, "hello", contentsResult.Get("0.parts.0.text").String())
+	require.Equal(t, "world", contentsResult.Get("0.parts.1.text").String())
+
+	// contents[1] (Model): has 2 parts (functionCall, text)
+	require.Equal(t, "model", contentsResult.Get("1.role").String())
+	require.Equal(t, int64(2), contentsResult.Get("1.parts.#").Int())
+
+	// contents[2] (User - tool responses): has 2 functionResponse parts
+	require.Equal(t, "user", contentsResult.Get("2.role").String())
+	require.Equal(t, int64(2), contentsResult.Get("2.parts.#").Int())
+	require.Equal(t, "search", contentsResult.Get("2.parts.0.functionResponse.name").String())
+	require.Equal(t, "search", contentsResult.Get("2.parts.1.functionResponse.name").String())
+}
+
+
 
