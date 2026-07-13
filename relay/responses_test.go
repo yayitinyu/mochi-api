@@ -322,3 +322,26 @@ func TestGeminiToolCallEncodingAndSignaturePreservation(t *testing.T) {
 	require.Equal(t, "default_api:web_search", gjson.GetBytes(convertedRequestBytes, "contents.1.parts.0.functionResponse.name").String())
 }
 
+func TestGeminiToolCallStreamAccumulatesThoughtSignature(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	recorder := httptest.NewRecorder()
+	context, _ := gin.CreateTestContext(recorder)
+	rc := &relayContext{c: context, clientFormat: FormatOpenAI, modelName: "gemini-3-flash-preview"}
+	upstream := &http.Response{
+		Body: io.NopCloser(strings.NewReader(
+			`data: {"candidates":[{"content":{"parts":[{"thought":true,"text":"Checking","thoughtSignature":"sig-123"}]}}]}` + "\n\n" +
+				`data: {"candidates":[{"content":{"parts":[{"functionCall":{"name":"default_api:web_search","args":{"query":"weather"}}]}}],"finishReason":"STOP","usageMetadata":{"promptTokenCount":4,"candidatesTokenCount":5}}` + "\n\n",
+		)),
+	}
+
+	_ = streamGeminiToOpenAI(rc, upstream)
+	body := recorder.Body.String()
+
+	// The tool call ID should be encoded from "default_api:web_search" and "sig-123"
+	expectedID := encodeToolCallID("default_api:web_search", "sig-123")
+	require.Contains(t, body, `"id":"`+expectedID+`"`)
+	require.Contains(t, body, `"name":"default_api:web_search"`)
+	require.Contains(t, body, `"thought_signature":"sig-123"`)
+}
+
+

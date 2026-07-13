@@ -305,6 +305,14 @@ func geminiCandidateToOpenAI(candidate gjson.Result) (string, string, []map[stri
 	var reasoning strings.Builder
 	var toolCalls []map[string]any
 	var messageExtra map[string]any
+
+	lastThoughtSignature := ""
+	for _, part := range candidate.Get("content.parts").Array() {
+		if sig := part.Get("thoughtSignature").String(); sig != "" {
+			lastThoughtSignature = sig
+		}
+	}
+
 	for _, part := range candidate.Get("content.parts").Array() {
 		if t := part.Get("text"); t.Exists() {
 			if part.Get("thought").Bool() {
@@ -319,7 +327,7 @@ func geminiCandidateToOpenAI(candidate gjson.Result) (string, string, []map[stri
 		if fc := part.Get("functionCall"); fc.Exists() {
 			args, _ := json.Marshal(fc.Get("args").Value())
 			name := fc.Get("name").String()
-			signature := part.Get("thoughtSignature").String()
+			signature := lastThoughtSignature
 			callID := fc.Get("id").String()
 			if callID == "" {
 				callID = encodeToolCallID(name, signature)
@@ -340,6 +348,7 @@ func geminiCandidateToOpenAI(candidate gjson.Result) (string, string, []map[stri
 	}
 	return text.String(), reasoning.String(), toolCalls, messageExtra
 }
+
 
 // --- non-stream response: Gemini -> OpenAI ---
 
@@ -392,6 +401,7 @@ func streamGeminiToOpenAI(rc *relayContext, resp *http.Response) usage {
 	firstChunk := true
 	toolIndex := 0
 	reasoningTokens := 0
+	lastThoughtSignature := ""
 
 	scanSSE(resp.Body, func(line string) {
 		payload, ok := strings.CutPrefix(line, "data:")
@@ -411,6 +421,11 @@ func streamGeminiToOpenAI(rc *relayContext, resp *http.Response) usage {
 			firstChunk = false
 		}
 		for _, part := range candidate.Get("content.parts").Array() {
+			if sig := part.Get("thoughtSignature").String(); sig != "" {
+				lastThoughtSignature = sig
+			}
+		}
+		for _, part := range candidate.Get("content.parts").Array() {
 			if t := part.Get("text"); t.Exists() && t.String() != "" {
 				field := "content"
 				if part.Get("thought").Bool() {
@@ -425,7 +440,7 @@ func streamGeminiToOpenAI(rc *relayContext, resp *http.Response) usage {
 			if fc := part.Get("functionCall"); fc.Exists() {
 				args, _ := json.Marshal(fc.Get("args").Value())
 				name := fc.Get("name").String()
-				signature := part.Get("thoughtSignature").String()
+				signature := lastThoughtSignature
 				callID := fc.Get("id").String()
 				if callID == "" {
 					callID = encodeToolCallID(name, signature)
@@ -447,6 +462,7 @@ func streamGeminiToOpenAI(rc *relayContext, resp *http.Response) usage {
 				toolIndex++
 			}
 		}
+
 		if fr := candidate.Get("finishReason"); fr.Exists() {
 			writeOpenAIChunkData(rc, openAIChunk(id, created, rc.modelName,
 				gin.H{}, geminiFinishToOpenAI(fr.String())))
