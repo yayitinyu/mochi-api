@@ -92,6 +92,7 @@ export function LogsPage() {
                 <tr className="text-left text-xs font-bold text-ink-soft">
                   <th className="px-6 py-4 whitespace-nowrap">时间</th>
                   <th className="px-4 py-4 whitespace-nowrap">模型</th>
+                  <th className="px-4 py-4 whitespace-nowrap">渠道</th>
                   <th className="px-4 py-4 whitespace-nowrap">密钥</th>
                   <th className="px-4 py-4 text-right whitespace-nowrap">输入</th>
                   <th className="px-4 py-4 text-right whitespace-nowrap">输出</th>
@@ -114,6 +115,9 @@ export function LogsPage() {
                           流式
                         </span>
                       )}
+                    </td>
+                    <td className="px-4 py-3 text-ink-soft">
+                      {l.channel_name || (l.channel_id > 0 ? `#${l.channel_id}` : '—')}
                     </td>
                     <td className="px-4 py-3 text-ink-soft">{l.token_name}</td>
                     <td className="px-4 py-3 text-right font-mono text-ink-soft">

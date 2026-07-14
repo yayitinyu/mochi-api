@@ -11,6 +11,7 @@ type Log struct {
 	Day              string `gorm:"index;size:10" json:"day"` // "2026-07-12", server-local
 	TokenName        string `json:"token_name"`
 	ChannelId        int    `json:"channel_id"`
+	ChannelName      string `gorm:"size:128" json:"channel_name"`
 	ModelName        string `gorm:"index;size:128" json:"model_name"`
 	PromptTokens     int    `json:"prompt_tokens"`
 	CompletionTokens int    `json:"completion_tokens"`

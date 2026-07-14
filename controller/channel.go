@@ -17,14 +17,22 @@ type channelRequest struct {
 	BaseURL  string `json:"base_url"`
 	ApiKey   string `json:"api_key"`
 	Models   string `json:"models"`
+	Icon     string `json:"icon"`
 	Priority int    `json:"priority"`
 	Status   int    `json:"status"`
 }
 
 func (req *channelRequest) validate() string {
 	req.Name = strings.TrimSpace(req.Name)
-	req.BaseURL = strings.TrimRight(strings.TrimSpace(req.BaseURL), "/")
+	// Trailing "/" (full API prefix) and "#" (exact endpoint URL) are
+	// meaningful path markers — see relay.upstreamTarget — so only
+	// duplicate trailing slashes are collapsed, never the last one.
+	req.BaseURL = strings.TrimSpace(req.BaseURL)
+	for strings.HasSuffix(req.BaseURL, "//") {
+		req.BaseURL = strings.TrimSuffix(req.BaseURL, "/")
+	}
 	req.Models = strings.TrimSpace(req.Models)
+	req.Icon = strings.TrimSpace(req.Icon)
 	if req.Name == "" {
 		return "名称不能为空"
 	}
@@ -34,6 +42,9 @@ func (req *channelRequest) validate() string {
 	}
 	if !strings.HasPrefix(req.BaseURL, "http://") && !strings.HasPrefix(req.BaseURL, "https://") {
 		return "Base URL 必须以 http:// 或 https:// 开头"
+	}
+	if len(req.Icon) > 512 {
+		return "图标 URL 过长"
 	}
 	if req.Models == "" {
 		return "模型列表不能为空"
@@ -68,7 +79,7 @@ func CreateChannel(c *gin.Context) {
 	}
 	channel := &model.Channel{
 		Name: req.Name, Type: req.Type, BaseURL: req.BaseURL, ApiKey: req.ApiKey,
-		Models: req.Models, Priority: req.Priority, Status: req.Status,
+		Models: req.Models, Icon: req.Icon, Priority: req.Priority, Status: req.Status,
 		CreatedAt: time.Now().Unix(),
 	}
 	if err := model.CreateChannel(channel); err != nil {
@@ -99,7 +110,7 @@ func UpdateChannel(c *gin.Context) {
 		return
 	}
 	channel.Name, channel.Type, channel.BaseURL = req.Name, req.Type, req.BaseURL
-	channel.ApiKey, channel.Models = req.ApiKey, req.Models
+	channel.ApiKey, channel.Models, channel.Icon = req.ApiKey, req.Models, req.Icon
 	channel.Priority, channel.Status = req.Priority, req.Status
 	if err := model.UpdateChannel(channel); err != nil {
 		respondError(c, http.StatusInternalServerError, "更新失败")

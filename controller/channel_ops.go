@@ -46,7 +46,11 @@ func FetchChannelModels(c *gin.Context) {
 		respondError(c, http.StatusBadRequest, "请求格式错误")
 		return
 	}
-	req.BaseURL = strings.TrimRight(strings.TrimSpace(req.BaseURL), "/")
+	req.BaseURL = strings.TrimSpace(req.BaseURL)
+	// Trailing "/" and "#" are meaningful path markers (see relay), keep them.
+	for strings.HasSuffix(req.BaseURL, "//") {
+		req.BaseURL = strings.TrimSuffix(req.BaseURL, "/")
+	}
 	if !strings.HasPrefix(req.BaseURL, "http://") && !strings.HasPrefix(req.BaseURL, "https://") {
 		respondError(c, http.StatusBadRequest, "Base URL 必须以 http:// 或 https:// 开头")
 		return

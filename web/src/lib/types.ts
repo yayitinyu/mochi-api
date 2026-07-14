@@ -42,6 +42,7 @@ export interface Channel {
   base_url: string;
   api_key: string;
   models: string;
+  icon: string;
   priority: number;
   status: number;
   created_at: number;
@@ -61,6 +62,7 @@ export interface LogEntry {
   day: string;
   token_name: string;
   channel_id: number;
+  channel_name: string;
   model_name: string;
   prompt_tokens: number;
   completion_tokens: number;

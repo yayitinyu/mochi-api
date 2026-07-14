@@ -15,8 +15,9 @@ import { Card } from '../components/Card';
 import { Field, Input, Select } from '../components/Field';
 import { Modal } from '../components/Modal';
 import { StatusBadge } from '../components/Badge';
-import { ModelIcon, ProviderIcon } from '../components/ModelIcon';
-import { CHANNEL_PRESETS } from '../lib/channelPresets';
+import { ChannelIcon, ModelIcon, ProviderIcon } from '../components/ModelIcon';
+import { ChannelPresetPicker } from '../components/ChannelPresetPicker';
+import { CHANNEL_PRESETS, type ChannelPreset } from '../lib/channelPresets';
 import { useToast } from '../components/Toast';
 
 interface Form {
@@ -25,6 +26,7 @@ interface Form {
   base_url: string;
   api_key: string;
   models: string;
+  icon: string;
   priority: number | '';
   status: number;
 }
@@ -37,6 +39,7 @@ const empty: Form = {
   base_url: '',
   api_key: '',
   models: '',
+  icon: '',
   priority: '',
   status: 1,
 };
@@ -88,17 +91,24 @@ export function ChannelsPage() {
     setOpen(true);
   }
 
-  function applyPreset(id: string) {
-    setPreset(id);
-    const p = CHANNEL_PRESETS.find((x) => x.id === id);
-    if (!p || p.id === 'custom') return;
-    setForm((f) => ({
-      ...f,
-      // Keep an already-typed custom name, otherwise fill the preset label.
-      name: f.name && f.name !== '' ? f.name : p.label,
-      type: p.type,
-      base_url: p.baseUrl,
-    }));
+  function applyPreset(p: ChannelPreset | null) {
+    if (!p) {
+      setPreset('custom');
+      return;
+    }
+    setPreset(p.id);
+    setForm((f) => {
+      // Keep a hand-typed name, but replace an untouched preset label when
+      // the user switches presets.
+      const nameIsAuto = f.name === '' || CHANNEL_PRESETS.some((x) => x.label === f.name);
+      return {
+        ...f,
+        name: nameIsAuto ? p.label : f.name,
+        type: p.type,
+        base_url: p.baseUrl,
+        icon: p.icon,
+      };
+    });
   }
 
   async function save(e: React.FormEvent) {
@@ -279,8 +289,13 @@ export function ChannelsPage() {
               {channels.map((ch) => (
                 <tr key={ch.id} className="border-t border-sakura-50 dark:border-white/5">
                   <td className="px-6 py-3.5">
-                    <div className="font-bold text-ink">{ch.name}</div>
-                    <div className="text-xs text-ink-soft">{ch.base_url}</div>
+                    <div className="flex items-center gap-2">
+                      <ChannelIcon icon={ch.icon} type={ch.type} size={18} />
+                      <div className="min-w-0">
+                        <div className="font-bold text-ink">{ch.name}</div>
+                        <div className="text-xs text-ink-soft">{ch.base_url}</div>
+                      </div>
+                    </div>
                   </td>
                   <td className="px-4 py-3.5">
                     <span className="inline-flex items-center gap-1.5 rounded-full bg-sky/15 px-2.5 py-0.5 text-xs font-bold text-sky">
@@ -354,18 +369,30 @@ export function ChannelsPage() {
           <input type="text" name="username" autoComplete="username" className="hidden" tabIndex={-1} aria-hidden />
           <input type="password" name="password" autoComplete="current-password" className="hidden" tabIndex={-1} aria-hidden />
           {!editing && (
-            <Field label="官方渠道" hint="选择后自动填入类型与 Base URL，只需再粘贴 API Key">
-              <Select value={preset} onChange={(e) => applyPreset(e.target.value)}>
-                {CHANNEL_PRESETS.map((p) => (
-                  <option key={p.id} value={p.id}>
-                    {p.label}
-                  </option>
-                ))}
-              </Select>
+            <Field label="官方渠道" hint="选择后自动填入类型、Base URL 与图标，只需再粘贴 API Key">
+              <ChannelPresetPicker value={preset} onSelect={applyPreset} />
             </Field>
           )}
           <Field label="名称">
             <Input value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} required />
+          </Field>
+          <Field
+            label="图标"
+            hint="可选；填写图片 URL 自定义图标，选择官方渠道时自动填入"
+          >
+            <div className="flex items-center gap-2">
+              <span className="grid h-10 w-10 shrink-0 place-items-center rounded-2xl border border-sakura-100 bg-surface dark:border-white/10">
+                <ChannelIcon icon={form.icon} type={form.type} size={18} />
+              </span>
+              <Input
+                value={form.icon}
+                onChange={(e) => setForm({ ...form, icon: e.target.value })}
+                placeholder="https://example.com/logo.png"
+                name="channel_icon"
+                autoComplete="off"
+                className="flex-1"
+              />
+            </div>
           </Field>
           <div className="grid grid-cols-2 gap-3">
             <Field label="类型">
@@ -392,7 +419,7 @@ export function ChannelsPage() {
             hint={
               form.type === 'gemini'
                 ? '例如 https://generativelanguage.googleapis.com，不含 /v1beta 路径'
-                : '例如 https://api.openai.com，不含 /v1 路径'
+                : '例如 https://api.openai.com（自动追加 /v1/…）；以 / 结尾表示完整 API 前缀，以 # 结尾表示完整端点 URL'
             }
           >
             <Input

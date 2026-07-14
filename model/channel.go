@@ -12,12 +12,15 @@ const (
 )
 
 type Channel struct {
-	Id        int    `gorm:"primaryKey" json:"id"`
-	Name      string `json:"name"`
-	Type      string `gorm:"size:32" json:"type"` // "openai" | "anthropic"
-	BaseURL   string `json:"base_url"`            // e.g. https://api.openai.com, no trailing path
-	ApiKey    string `json:"api_key"`
-	Models    string `json:"models"` // comma-joined model names
+	Id      int    `gorm:"primaryKey" json:"id"`
+	Name    string `json:"name"`
+	Type    string `gorm:"size:32" json:"type"` // "openai" | "anthropic"
+	BaseURL string `json:"base_url"`            // e.g. https://api.openai.com; a trailing "/" marks a full API prefix, a trailing "#" marks an exact endpoint URL
+	ApiKey  string `json:"api_key"`
+	Models  string `json:"models"` // comma-joined model names
+	// Icon is either a preset icon key (e.g. "deepseek") or an image URL
+	// for custom channels; the frontend resolves it.
+	Icon      string `gorm:"size:512" json:"icon"`
 	Priority  int    `json:"priority"`
 	Status    int    `json:"status"`
 	CreatedAt int64  `json:"created_at"`
@@ -119,7 +122,7 @@ func CreateChannel(channel *Channel) error {
 
 func UpdateChannel(channel *Channel) error {
 	return DB.Model(channel).
-		Select("name", "type", "base_url", "api_key", "models", "priority", "status").
+		Select("name", "type", "base_url", "api_key", "models", "icon", "priority", "status").
 		Updates(channel).Error
 }
 

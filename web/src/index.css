@@ -3,7 +3,9 @@
 /* Class-based dark mode, toggled on <html>. */
 @custom-variant dark (&:where(.dark, .dark *));
 
-/* Rounded, friendly type: Nunito for Latin, system rounded CJK fallback. */
+/* Rounded, friendly type: ChillRoundF (寒蝉全圆体) covers Latin + CJK, loaded
+   as unicode-range shards via /fonts/chill-round/result.css (linked in
+   index.html). Nunito stays as a lightweight Latin fallback. */
 @font-face {
   font-family: 'Nunito';
   font-style: normal;
@@ -13,8 +15,8 @@
 }
 
 @theme {
-  --font-sans: 'Nunito', 'PingFang SC', 'Hiragino Sans GB', 'Microsoft YaHei UI Rounded',
-    'Microsoft YaHei', system-ui, sans-serif;
+  --font-sans: '寒蝉全圆体', 'Nunito', 'PingFang SC', 'Hiragino Sans GB',
+    'Microsoft YaHei UI Rounded', 'Microsoft YaHei', system-ui, sans-serif;
 
   /* Sakura pastel palette — single accent locked across the app. */
   --color-sakura-50: #fff5f8;

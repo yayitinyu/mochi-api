@@ -9,6 +9,7 @@ import (
 	"net"
 	"net/http"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/gin-gonic/gin"
@@ -88,39 +89,66 @@ func Handle(c *gin.Context, clientFormat Format) {
 			"没有可用渠道支持模型 "+rc.modelName)
 		return
 	}
-	rc.channel = pickChannel(channels)
-	switch rc.channel.Type {
-	case model.ChannelTypeAnthropic:
-		rc.upstreamFormat = FormatClaude
-	case model.ChannelTypeGemini:
-		rc.upstreamFormat = FormatGemini
-	default:
-		if clientFormat == FormatResponses {
-			rc.upstreamFormat = FormatResponses
-		} else {
-			rc.upstreamFormat = FormatOpenAI
+
+	// Try channels in failover order until one accepts the request. The
+	// request body is fully buffered, so it can be replayed against the
+	// next channel; nothing is written to the client until a channel is
+	// chosen, so switching is invisible to the caller.
+	candidates := orderChannels(channels)
+	var resp *http.Response
+	var lastErr error
+	for i := range candidates {
+		rc.channel = &candidates[i]
+		rc.upstreamFormat = upstreamFormatFor(rc.channel.Type, clientFormat)
+		last := i == len(candidates)-1
+
+		upstreamBody, err := prepareUpstreamBody(rc, body)
+		if err != nil {
+			// Conversion errors depend on the channel type; another channel
+			// may accept the same request in its native format.
+			lastErr = fmt.Errorf("请求转换失败: %w", err)
+			if last {
+				writeError(c, clientFormat, http.StatusBadRequest, "invalid_request_error", lastErr.Error())
+				return
+			}
+			continue
 		}
-	}
 
-	upstreamBody, err := prepareUpstreamBody(rc, body)
-	if err != nil {
-		writeError(c, clientFormat, http.StatusBadRequest, "invalid_request_error",
-			"请求转换失败: "+err.Error())
-		return
+		resp, err = sendUpstreamWithResponsesFallback(rc, body, upstreamBody)
+		if err != nil {
+			lastErr = fmt.Errorf("上游请求失败: %w", err)
+			markChannelFailure(rc.channel.Id)
+			recordRelayLog(rc, usage{}, http.StatusBadGateway)
+			if last {
+				writeError(c, clientFormat, http.StatusBadGateway, "api_error", lastErr.Error())
+				return
+			}
+			continue
+		}
+		if resp.StatusCode != http.StatusOK && !last && retriableStatus(resp.StatusCode) {
+			markChannelFailure(rc.channel.Id)
+			recordRelayLog(rc, usage{}, resp.StatusCode)
+			_ = resp.Body.Close()
+			resp = nil
+			continue
+		}
+		break
 	}
-
-	resp, err := sendUpstreamWithResponsesFallback(rc, body, upstreamBody)
-	if err != nil {
-		recordRelayLog(rc, usage{}, http.StatusBadGateway)
-		writeError(c, clientFormat, http.StatusBadGateway, "api_error", "上游请求失败: "+err.Error())
+	if resp == nil {
+		// Every candidate failed with a network error or was skipped.
+		writeError(c, clientFormat, http.StatusBadGateway, "api_error", lastErr.Error())
 		return
 	}
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
+		if retriableStatus(resp.StatusCode) {
+			markChannelFailure(rc.channel.Id)
+		}
 		relayUpstreamError(rc, resp)
 		return
 	}
+	markChannelSuccess(rc.channel.Id)
 
 	isEventStream := strings.Contains(resp.Header.Get("Content-Type"), "text/event-stream")
 	var u usage
@@ -259,21 +287,66 @@ func isUnsupportedResponsesError(status int, body []byte) bool {
 }
 
 // upstreamTarget returns the request URL and auth header for the channel.
+//
+// Base URL conventions for non-standard upstream paths:
+//   - no trailing marker: the standard version prefix is appended
+//     (/v1/chat/completions, /v1/messages, /v1beta/models/...)
+//   - trailing "/": the base is a complete API prefix; only the endpoint
+//     leaf is appended (chat/completions, messages, models/{model}:...)
+//   - trailing "#": the base is the exact endpoint URL, used as-is.
+//     Gemini interpolates the model into the path, so "#" falls back to
+//     the trailing-"/" behavior there.
 func upstreamTarget(rc *relayContext) (url, headerKey, headerVal string) {
+	base, exact := splitBaseURL(rc.channel.BaseURL)
 	switch rc.upstreamFormat {
 	case FormatClaude:
-		return rc.channel.BaseURL + "/v1/messages", "x-api-key", rc.channel.ApiKey
+		return joinUpstreamPath(base, exact, "/v1/messages"), "x-api-key", rc.channel.ApiKey
 	case FormatGemini:
 		action := "generateContent"
 		if rc.stream {
 			action = "streamGenerateContent?alt=sse"
 		}
-		url = fmt.Sprintf("%s/v1beta/models/%s:%s", rc.channel.BaseURL, rc.modelName, action)
-		return url, "x-goog-api-key", rc.channel.ApiKey
+		leaf := fmt.Sprintf("/models/%s:%s", rc.modelName, action)
+		if exact == exactEndpoint || exact == fullPrefix {
+			return strings.TrimSuffix(base, "/") + leaf, "x-goog-api-key", rc.channel.ApiKey
+		}
+		return base + "/v1beta" + leaf, "x-goog-api-key", rc.channel.ApiKey
 	case FormatResponses:
-		return rc.channel.BaseURL + "/v1/responses", "Authorization", "Bearer " + rc.channel.ApiKey
+		return joinUpstreamPath(base, exact, "/v1/responses"), "Authorization", "Bearer " + rc.channel.ApiKey
 	default:
-		return rc.channel.BaseURL + "/v1/chat/completions", "Authorization", "Bearer " + rc.channel.ApiKey
+		return joinUpstreamPath(base, exact, "/v1/chat/completions"), "Authorization", "Bearer " + rc.channel.ApiKey
+	}
+}
+
+type baseURLMode int
+
+const (
+	standardBase  baseURLMode = iota // append the full version path
+	fullPrefix                       // trailing "/": append only the endpoint leaf
+	exactEndpoint                    // trailing "#": use the URL as-is
+)
+
+// splitBaseURL strips the trailing path marker and reports which mode applies.
+func splitBaseURL(baseURL string) (string, baseURLMode) {
+	if strings.HasSuffix(baseURL, "#") {
+		return strings.TrimSuffix(baseURL, "#"), exactEndpoint
+	}
+	if strings.HasSuffix(baseURL, "/") {
+		return strings.TrimSuffix(baseURL, "/"), fullPrefix
+	}
+	return baseURL, standardBase
+}
+
+// joinUpstreamPath combines the cleaned base URL with the standard endpoint
+// path according to the mode. versionedPath must start with "/v1/".
+func joinUpstreamPath(base string, mode baseURLMode, versionedPath string) string {
+	switch mode {
+	case exactEndpoint:
+		return base
+	case fullPrefix:
+		return base + strings.TrimPrefix(versionedPath, "/v1")
+	default:
+		return base + versionedPath
 	}
 }
 
@@ -424,14 +497,85 @@ func relayUpstreamError(rc *relayContext, resp *http.Response) {
 	writeError(rc.c, rc.clientFormat, resp.StatusCode, "api_error", message)
 }
 
-func pickChannel(channels []model.Channel) *model.Channel {
-	// channels are sorted by priority desc; choose randomly among the top tier.
-	top := channels[0].Priority
-	n := 1
-	for n < len(channels) && channels[n].Priority == top {
-		n++
+// upstreamFormatFor maps a channel type to the wire format sent upstream.
+func upstreamFormatFor(channelType string, clientFormat Format) Format {
+	switch channelType {
+	case model.ChannelTypeAnthropic:
+		return FormatClaude
+	case model.ChannelTypeGemini:
+		return FormatGemini
+	default:
+		if clientFormat == FormatResponses {
+			return FormatResponses
+		}
+		return FormatOpenAI
 	}
-	return &channels[rand.IntN(n)]
+}
+
+// channelCooldowns tracks channels that recently failed so orderChannels can
+// deprioritize them for a short window instead of hammering a dead upstream.
+var channelCooldowns sync.Map // channel id (int) -> cooldown expiry (time.Time)
+
+const channelCooldown = 60 * time.Second
+
+func markChannelFailure(id int) {
+	channelCooldowns.Store(id, time.Now().Add(channelCooldown))
+}
+
+func markChannelSuccess(id int) {
+	channelCooldowns.Delete(id)
+}
+
+func channelCoolingDown(id int) bool {
+	v, ok := channelCooldowns.Load(id)
+	if !ok {
+		return false
+	}
+	if time.Now().After(v.(time.Time)) {
+		channelCooldowns.Delete(id)
+		return false
+	}
+	return true
+}
+
+// retriableStatus reports whether an upstream status suggests another channel
+// could serve the request: auth/permission/quota problems and server errors
+// are channel-specific, while other 4xx statuses indict the request itself.
+func retriableStatus(code int) bool {
+	switch code {
+	case http.StatusUnauthorized, http.StatusForbidden, http.StatusNotFound,
+		http.StatusRequestTimeout, http.StatusTooManyRequests:
+		return true
+	}
+	return code >= 500
+}
+
+// orderChannels returns the failover order: channels grouped by priority
+// (already sorted descending), shuffled within each tier to spread load,
+// with channels in failure cooldown moved to the back as a last resort.
+func orderChannels(channels []model.Channel) []model.Channel {
+	ordered := make([]model.Channel, len(channels))
+	copy(ordered, channels)
+	for lo := 0; lo < len(ordered); {
+		hi := lo + 1
+		for hi < len(ordered) && ordered[hi].Priority == ordered[lo].Priority {
+			hi++
+		}
+		rand.Shuffle(hi-lo, func(i, j int) {
+			ordered[lo+i], ordered[lo+j] = ordered[lo+j], ordered[lo+i]
+		})
+		lo = hi
+	}
+	healthy := make([]model.Channel, 0, len(ordered))
+	var cooling []model.Channel
+	for _, ch := range ordered {
+		if channelCoolingDown(ch.Id) {
+			cooling = append(cooling, ch)
+		} else {
+			healthy = append(healthy, ch)
+		}
+	}
+	return append(healthy, cooling...)
 }
 
 func recordRelayLog(rc *relayContext, u usage, code int) {
@@ -443,6 +587,7 @@ func recordRelayLog(rc *relayContext, u usage, code int) {
 		UserId:           rc.c.GetInt("user_id"),
 		TokenName:        rc.c.GetString("token_name"),
 		ChannelId:        rc.channel.Id,
+		ChannelName:      rc.channel.Name,
 		ModelName:        rc.modelName,
 		PromptTokens:     u.prompt,
 		CompletionTokens: u.completion,

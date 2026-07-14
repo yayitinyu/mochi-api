@@ -17,9 +17,25 @@ import (
 // are valid. OpenAI/Anthropic use GET /v1/models (data[].id); Gemini uses
 // GET /v1beta/models (models[].name, prefixed with "models/").
 func ListUpstreamModels(chType, baseURL, apiKey string) ([]string, time.Duration, error) {
-	url := baseURL + "/v1/models"
-	if chType == model.ChannelTypeGemini {
-		url = baseURL + "/v1beta/models"
+	base, mode := splitBaseURL(baseURL)
+	var url string
+	switch {
+	case chType == model.ChannelTypeGemini:
+		// Gemini has no bare "models" leaf under a custom prefix; the version
+		// segment is always required.
+		if mode == standardBase {
+			url = base + "/v1beta/models"
+		} else {
+			url = base + "/models"
+		}
+	case mode == exactEndpoint:
+		// The exact-endpoint marker targets a chat endpoint, not a model list;
+		// derive the models path from the host root instead.
+		url = modelsURLFromExact(base)
+	case mode == fullPrefix:
+		url = base + "/models"
+	default:
+		url = base + "/v1/models"
 	}
 	req, err := http.NewRequest(http.MethodGet, url, nil)
 	if err != nil {
@@ -82,4 +98,15 @@ func ListUpstreamModels(chType, baseURL, apiKey string) ([]string, time.Duration
 		}
 	}
 	return models, latency, nil
+}
+
+// modelsURLFromExact guesses the model-list URL for an exact-endpoint ("#")
+// base by stripping the known chat endpoint leaf and appending "models".
+func modelsURLFromExact(exactURL string) string {
+	for _, leaf := range []string{"/chat/completions", "/messages", "/responses"} {
+		if prefix, ok := strings.CutSuffix(exactURL, leaf); ok {
+			return prefix + "/models"
+		}
+	}
+	return strings.TrimSuffix(exactURL, "/") + "/models"
 }

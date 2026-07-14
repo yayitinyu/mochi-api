@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import type { DailyStat } from '../lib/types';
 import { formatCost, formatNumber } from '../lib/format';
 
@@ -37,6 +37,14 @@ function levelFor(tokens: number, max: number): number {
 
 export function Heatmap({ stats }: { stats: DailyStat[] }) {
   const [hover, setHover] = useState<Cell | null>(null);
+  const scrollRef = useRef<HTMLDivElement>(null);
+
+  // On narrow screens the grid overflows; keep the newest days (rightmost
+  // columns) in view instead of showing a year-old left edge.
+  useEffect(() => {
+    const el = scrollRef.current;
+    if (el) el.scrollLeft = el.scrollWidth;
+  }, [stats]);
 
   const { weeks, maxTokens } = useMemo(() => {
     const byDay = new Map(stats.map((s) => [s.day, s]));
@@ -82,7 +90,7 @@ export function Heatmap({ stats }: { stats: DailyStat[] }) {
 
   return (
     <div>
-      <div className="overflow-x-auto pb-1">
+      <div ref={scrollRef} className="overflow-x-auto pb-1">
         <div className="min-w-max">
           <div className="mb-1.5 flex gap-[3px]">
             {monthLabels.map((label, i) => (
