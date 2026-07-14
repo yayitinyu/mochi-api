@@ -214,7 +214,7 @@ export function PricesPage() {
                 onChange={(e) => setForm({ ...form, model: e.target.value })}
                 placeholder="gpt-4o"
                 required
-                className="flex-1"
+                className="flex-1 min-w-0"
               />
               {!editing && (
                 <Button

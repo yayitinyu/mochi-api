@@ -390,7 +390,7 @@ export function ChannelsPage() {
                 placeholder="https://example.com/logo.png"
                 name="channel_icon"
                 autoComplete="off"
-                className="flex-1"
+                className="flex-1 min-w-0"
               />
             </div>
           </Field>
@@ -448,7 +448,7 @@ export function ChannelsPage() {
                 onChange={(e) => setForm({ ...form, models: e.target.value })}
                 placeholder="gpt-4o, gpt-4o-mini"
                 required
-                className="flex-1"
+                className="flex-1 min-w-0"
               />
               <div className="flex shrink-0 gap-2">
                 <Button
