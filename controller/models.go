@@ -35,14 +35,21 @@ func ListRelayModels(c *gin.Context) {
 			"id": m, "object": "model", "created": now, "owned_by": "mochi-api",
 		})
 	}
-	// Add aliases only if their upstream model exists in enabled channels.
+	// Add aliases only if at least one of their mapped upstream models exists in enabled channels.
 	enabled := make(map[string]bool, len(models))
 	for _, m := range models {
 		enabled[m] = true
 	}
 	for _, alias := range aliases {
-		upstream, _ := model.ResolveAlias(alias)
-		if enabled[upstream] {
+		upstreamListStr, _ := model.ResolveAlias(alias)
+		hasEnabledUpstream := false
+		for _, m := range model.ParseModelList(upstreamListStr) {
+			if enabled[m] {
+				hasEnabledUpstream = true
+				break
+			}
+		}
+		if hasEnabledUpstream {
 			data = append(data, gin.H{
 				"id": alias, "object": "model", "created": now, "owned_by": "mochi-api",
 			})

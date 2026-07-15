@@ -75,17 +75,18 @@ func Handle(c *gin.Context, clientFormat Format) {
 		writeError(c, clientFormat, http.StatusBadRequest, "invalid_request_error", "缺少 model 字段")
 		return
 	}
+	var targetModels []string
 	if upstream, ok := model.ResolveAlias(rc.modelName); ok {
-		rc.upstreamModel = upstream
+		targetModels = model.ParseModelList(upstream)
 	} else {
-		rc.upstreamModel = rc.modelName
+		targetModels = []string{rc.modelName}
 	}
 	rc.stream = gjson.GetBytes(body, "stream").Bool()
 	rc.clientWantsUsage = clientFormat == FormatOpenAI &&
 		gjson.GetBytes(body, "stream_options.include_usage").Bool()
 	rc.promptText = collectPromptText(body)
 
-	channels, err := model.GetEnabledChannelsForModel(rc.upstreamModel)
+	channels, err := model.GetEnabledChannelsForModelList(targetModels)
 	if err != nil {
 		writeError(c, clientFormat, http.StatusInternalServerError, "api_error", "数据库错误")
 		return
@@ -94,12 +95,6 @@ func Handle(c *gin.Context, clientFormat Format) {
 		writeError(c, clientFormat, http.StatusNotFound, "invalid_request_error",
 			"没有可用渠道支持模型 "+rc.modelName)
 		return
-	}
-
-	// Rewrite the model field in the body to the upstream name so all
-	// downstream channel handling sees the real model identifier.
-	if rc.upstreamModel != rc.modelName {
-		body, _ = sjson.SetBytes(body, "model", rc.upstreamModel)
 	}
 
 	// Try channels in failover order until one accepts the request. The
@@ -111,10 +106,20 @@ func Handle(c *gin.Context, clientFormat Format) {
 	var lastErr error
 	for i := range candidates {
 		rc.channel = &candidates[i]
+		actualModel, ok := rc.channel.FirstSupportedModel(targetModels)
+		if !ok {
+			continue
+		}
+		rc.upstreamModel = actualModel
 		rc.upstreamFormat = upstreamFormatFor(rc.channel, clientFormat)
 		last := i == len(candidates)-1
 
-		upstreamBody, err := prepareUpstreamBody(rc, body)
+		channelBody := body
+		if actualModel != rc.modelName {
+			channelBody, _ = sjson.SetBytes(body, "model", actualModel)
+		}
+
+		upstreamBody, err := prepareUpstreamBody(rc, channelBody)
 		if err != nil {
 			// Conversion errors depend on the channel type; another channel
 			// may accept the same request in its native format.

@@ -1,9 +1,22 @@
 package model
 
 import (
+	"strings"
 	"sync"
 	"time"
 )
+
+// ParseModelList splits a comma-separated model list into clean trimmed names.
+func ParseModelList(val string) []string {
+	var list []string
+	for _, s := range strings.Split(val, ",") {
+		s = strings.TrimSpace(s)
+		if s != "" {
+			list = append(list, s)
+		}
+	}
+	return list
+}
 
 // ModelMapping stores an alias-to-upstream mapping. Users request using the
 // alias; Mochi resolves it to the upstream model name before forwarding.
@@ -15,12 +28,12 @@ type ModelMapping struct {
 }
 
 // ---------------------------------------------------------------------------
-// In-memory cache: alias -> upstream name
+// In-memory cache: alias -> upstream name (or comma-separated upstream names)
 // ---------------------------------------------------------------------------
 
 var (
 	mappingMu    sync.RWMutex
-	aliasToUp    = make(map[string]string) // alias -> upstream
+	aliasToUp    = make(map[string]string) // alias -> upstream list string
 	upstreamSet  = make(map[string]bool)   // upstream names that have ≥1 alias
 	aliasList    []string                  // all alias names
 )
@@ -68,7 +81,9 @@ func RefreshMappingCache() error {
 
 	for _, m := range mappings {
 		newAlias[m.Alias] = m.UpstreamName
-		newUpstream[m.UpstreamName] = true
+		for _, up := range ParseModelList(m.UpstreamName) {
+			newUpstream[up] = true
+		}
 		newList = append(newList, m.Alias)
 	}
 

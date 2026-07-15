@@ -152,11 +152,11 @@ export function ModelMappingsPage() {
               required
             />
           </Field>
-          <Field label="上游模型名" hint="实际转发给上游渠道的模型名">
+          <Field label="上游模型名" hint="实际转发给上游渠道的模型名；支持填入多个模型（用英文逗号分隔）进行容灾/分流，如 gpt-4o, claude-3-5-sonnet">
             <Input
               value={form.upstream_name}
               onChange={(e) => setForm({ ...form, upstream_name: e.target.value })}
-              placeholder="gpt-4o"
+              placeholder="gpt-4o, claude-3-5-sonnet"
               required
             />
           </Field>

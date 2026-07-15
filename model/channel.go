@@ -68,9 +68,19 @@ func GetAllChannels() ([]Channel, error) {
 	return channels, err
 }
 
-// GetEnabledChannelsForModel returns enabled channels serving the model,
+// FirstSupportedModel returns the first model in the list that is supported by the channel.
+func (ch *Channel) FirstSupportedModel(models []string) (string, bool) {
+	for _, m := range models {
+		if ch.SupportsModel(m) {
+			return m, true
+		}
+	}
+	return "", false
+}
+
+// GetEnabledChannelsForModelList returns enabled channels serving any model in the list,
 // ordered by priority descending.
-func GetEnabledChannelsForModel(model string) ([]Channel, error) {
+func GetEnabledChannelsForModelList(models []string) ([]Channel, error) {
 	var channels []Channel
 	err := DB.Where("status = ?", StatusEnabled).Order("priority desc").Find(&channels).Error
 	if err != nil {
@@ -78,11 +88,20 @@ func GetEnabledChannelsForModel(model string) ([]Channel, error) {
 	}
 	matched := make([]Channel, 0, len(channels))
 	for _, ch := range channels {
-		if ch.SupportsModel(model) {
-			matched = append(matched, ch)
+		for _, m := range models {
+			if ch.SupportsModel(m) {
+				matched = append(matched, ch)
+				break
+			}
 		}
 	}
 	return matched, nil
+}
+
+// GetEnabledChannelsForModel returns enabled channels serving the model,
+// ordered by priority descending.
+func GetEnabledChannelsForModel(model string) ([]Channel, error) {
+	return GetEnabledChannelsForModelList([]string{model})
 }
 
 // GetEnabledModels returns the deduplicated union of models across enabled channels.

@@ -78,8 +78,19 @@ func validateMapping(m *model.ModelMapping) string {
 	if strings.Contains(m.Alias, ",") {
 		return "别名不能包含逗号"
 	}
-	if m.Alias == m.UpstreamName {
-		return "别名不能与上游模型名称相同"
+	
+	upstreams := model.ParseModelList(m.UpstreamName)
+	if len(upstreams) == 0 {
+		return "上游模型名称不能为空"
+	}
+
+	// Normalize the comma-separated string formatting (e.g. "modelA, modelB")
+	m.UpstreamName = strings.Join(upstreams, ", ")
+
+	for _, name := range upstreams {
+		if name == m.Alias {
+			return "别名不能与任一上游模型名称相同"
+		}
 	}
 	return ""
 }
