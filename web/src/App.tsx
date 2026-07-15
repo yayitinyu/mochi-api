@@ -8,6 +8,7 @@ import { DashboardPage } from './pages/DashboardPage';
 import { KeysPage } from './pages/KeysPage';
 import { LogsPage } from './pages/LogsPage';
 import { ChannelsPage } from './pages/ChannelsPage';
+import { ModelMappingsPage } from './pages/ModelMappingsPage';
 import { PricesPage } from './pages/PricesPage';
 import { UsersPage } from './pages/UsersPage';
 import { SettingsPage } from './pages/SettingsPage';
@@ -73,6 +74,16 @@ function Router() {
           <Guard admin>
             <Layout title="渠道管理">
               <ChannelsPage />
+            </Layout>
+          </Guard>
+        }
+      />
+      <Route
+        path="/model-mappings"
+        element={
+          <Guard admin>
+            <Layout title="模型映射">
+              <ModelMappingsPage />
             </Layout>
           </Guard>
         }

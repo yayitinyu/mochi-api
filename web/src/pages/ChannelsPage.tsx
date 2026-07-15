@@ -257,7 +257,7 @@ export function ChannelsPage() {
   const selectedModelCount = pickerModels.filter((model) => selectedModels.has(model)).length;
 
   return (
-    <div className="max-w-5xl">
+    <div className="max-w-6xl">
       <div className="mb-4 flex justify-end">
         <Button onClick={openCreate}>
           <PlusIcon size={16} weight="bold" /> 新建渠道
@@ -301,17 +301,10 @@ export function ChannelsPage() {
                     </div>
                   </td>
                   <td className="px-4 py-3.5">
-                    <div className="flex flex-col items-start gap-1">
-                      <span className="inline-flex items-center gap-1.5 rounded-full bg-sky/15 px-2.5 py-0.5 text-xs font-bold text-sky">
-                        <ProviderIcon type={ch.type} size={13} />
-                        {ch.type === 'anthropic' ? 'Anthropic' : ch.type === 'gemini' ? 'Gemini' : 'OpenAI'}
-                      </span>
-                      {ch.type === 'openai' && (
-                        <span className="whitespace-nowrap text-[11px] font-bold text-ink-soft">
-                          {ch.responses_mode === 'native' ? '原生 Responses' : 'Chat 转换'}
-                        </span>
-                      )}
-                    </div>
+                    <span className="inline-flex items-center gap-1.5 rounded-full bg-sky/15 px-2.5 py-0.5 text-xs font-bold text-sky">
+                      <ProviderIcon type={ch.type} size={13} />
+                      {ch.type === 'anthropic' ? 'Anthropic' : ch.type === 'gemini' ? 'Gemini' : 'OpenAI'}
+                    </span>
                   </td>
                   <td className="max-w-[16rem] px-4 py-3.5">
                     <div className="flex flex-wrap gap-1">

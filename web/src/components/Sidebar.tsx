@@ -1,6 +1,7 @@
 import { useState } from 'react';
 import { NavLink, useNavigate } from 'react-router-dom';
 import {
+  ArrowsLeftRightIcon,
   ChartLineUpIcon,
   GearSixIcon,
   KeyIcon,
@@ -29,6 +30,7 @@ const items: NavItem[] = [
   { to: '/keys', label: 'API 密钥', icon: KeyIcon },
   { to: '/logs', label: '调用日志', icon: ScrollIcon },
   { to: '/channels', label: '渠道管理', icon: PlugsConnectedIcon, adminOnly: true },
+  { to: '/model-mappings', label: '模型映射', icon: ArrowsLeftRightIcon, adminOnly: true },
   { to: '/prices', label: '模型价格', icon: TagIcon, adminOnly: true },
   { to: '/users', label: '用户管理', icon: UsersIcon, adminOnly: true },
   { to: '/settings', label: '站点设置', icon: GearSixIcon, adminOnly: true },

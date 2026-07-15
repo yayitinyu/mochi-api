@@ -27,6 +27,7 @@ func InitDB() error {
 		&Log{},
 		&Option{},
 		&InviteCode{},
+		&ModelMapping{},
 	); err != nil {
 		return err
 	}
@@ -39,7 +40,10 @@ func InitDB() error {
 	}
 	// Existing OpenAI-compatible channels predate explicit Responses
 	// capabilities. Default them to the safer Chat conversion path.
-	return DB.Model(&Channel{}).
+	if err := DB.Model(&Channel{}).
 		Where("responses_mode IS NULL OR responses_mode = ''").
-		Update("responses_mode", ChannelResponsesModeChat).Error
+		Update("responses_mode", ChannelResponsesModeChat).Error; err != nil {
+		return err
+	}
+	return RefreshMappingCache()
 }

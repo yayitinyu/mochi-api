@@ -53,6 +53,7 @@ type relayContext struct {
 	upstreamFormat   Format
 	channel          *model.Channel
 	modelName        string
+	upstreamModel    string // resolved upstream name (equals modelName when no alias)
 	stream           bool
 	clientWantsUsage bool   // OpenAI client explicitly set stream_options.include_usage
 	promptText       string // rough concatenation of input text, for fallback estimation
@@ -74,12 +75,17 @@ func Handle(c *gin.Context, clientFormat Format) {
 		writeError(c, clientFormat, http.StatusBadRequest, "invalid_request_error", "缺少 model 字段")
 		return
 	}
+	if upstream, ok := model.ResolveAlias(rc.modelName); ok {
+		rc.upstreamModel = upstream
+	} else {
+		rc.upstreamModel = rc.modelName
+	}
 	rc.stream = gjson.GetBytes(body, "stream").Bool()
 	rc.clientWantsUsage = clientFormat == FormatOpenAI &&
 		gjson.GetBytes(body, "stream_options.include_usage").Bool()
 	rc.promptText = collectPromptText(body)
 
-	channels, err := model.GetEnabledChannelsForModel(rc.modelName)
+	channels, err := model.GetEnabledChannelsForModel(rc.upstreamModel)
 	if err != nil {
 		writeError(c, clientFormat, http.StatusInternalServerError, "api_error", "数据库错误")
 		return
@@ -88,6 +94,12 @@ func Handle(c *gin.Context, clientFormat Format) {
 		writeError(c, clientFormat, http.StatusNotFound, "invalid_request_error",
 			"没有可用渠道支持模型 "+rc.modelName)
 		return
+	}
+
+	// Rewrite the model field in the body to the upstream name so all
+	// downstream channel handling sees the real model identifier.
+	if rc.upstreamModel != rc.modelName {
+		body, _ = sjson.SetBytes(body, "model", rc.upstreamModel)
 	}
 
 	// Try channels in failover order until one accepts the request. The
@@ -306,7 +318,7 @@ func upstreamTarget(rc *relayContext) (url, headerKey, headerVal string) {
 		if rc.stream {
 			action = "streamGenerateContent?alt=sse"
 		}
-		leaf := fmt.Sprintf("/models/%s:%s", rc.modelName, action)
+		leaf := fmt.Sprintf("/models/%s:%s", rc.upstreamModel, action)
 		if exact == exactEndpoint || exact == fullPrefix {
 			return strings.TrimSuffix(base, "/") + leaf, "x-goog-api-key", rc.channel.ApiKey
 		}

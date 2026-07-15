@@ -111,3 +111,10 @@ export interface UserStat {
   completion_tokens: number;
   cost_micros: number;
 }
+
+export interface ModelMapping {
+  id: number;
+  alias: string;
+  upstream_name: string;
+  created_at: number;
+}

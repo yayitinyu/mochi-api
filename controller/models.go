@@ -10,7 +10,8 @@ import (
 )
 
 // ListRelayModels serves GET /v1/models in OpenAI format:
-// the union of models across enabled channels.
+// the union of models across enabled channels. Upstream names that have
+// aliases are hidden; the aliases are shown instead.
 func ListRelayModels(c *gin.Context) {
 	models, err := model.GetEnabledModels()
 	if err != nil {
@@ -19,12 +20,33 @@ func ListRelayModels(c *gin.Context) {
 		})
 		return
 	}
+
+	// Replace upstream names that have aliases with their aliases.
+	hidden := model.GetUpstreamNamesWithAliases()
+	aliases := model.GetAllAliases()
+
 	now := time.Now().Unix()
-	data := make([]gin.H, 0, len(models))
+	data := make([]gin.H, 0, len(models)+len(aliases))
 	for _, m := range models {
+		if hidden[m] {
+			continue // hide original name if it has an alias
+		}
 		data = append(data, gin.H{
 			"id": m, "object": "model", "created": now, "owned_by": "mochi-api",
 		})
+	}
+	// Add aliases only if their upstream model exists in enabled channels.
+	enabled := make(map[string]bool, len(models))
+	for _, m := range models {
+		enabled[m] = true
+	}
+	for _, alias := range aliases {
+		upstream, _ := model.ResolveAlias(alias)
+		if enabled[upstream] {
+			data = append(data, gin.H{
+				"id": alias, "object": "model", "created": now, "owned_by": "mochi-api",
+			})
+		}
 	}
 	c.JSON(http.StatusOK, gin.H{"object": "list", "data": data})
 }

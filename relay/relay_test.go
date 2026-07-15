@@ -85,6 +85,7 @@ func TestUpstreamTargetBaseURLConventions(t *testing.T) {
 				channel:        &model.Channel{Type: tt.chType, BaseURL: tt.baseURL, ApiKey: "k"},
 				upstreamFormat: tt.format,
 				modelName:      "gemini-pro",
+				upstreamModel:  "gemini-pro",
 				stream:         tt.stream,
 			}
 			url, _, _ := upstreamTarget(rc)

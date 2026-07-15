@@ -94,5 +94,10 @@ func SetApiRouter(r *gin.Engine) {
 		admin.PUT("/settings", controller.UpdateSettings)
 
 		admin.GET("/stats/users", controller.StatsUsers)
+
+		admin.GET("/model_mappings", controller.ListModelMappings)
+		admin.POST("/model_mappings", controller.CreateModelMapping)
+		admin.PUT("/model_mappings/:id", controller.UpdateModelMapping)
+		admin.DELETE("/model_mappings/:id", controller.DeleteModelMapping)
 	}
 }

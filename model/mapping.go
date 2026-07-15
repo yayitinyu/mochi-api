@@ -1,0 +1,120 @@
+package model
+
+import (
+	"sync"
+	"time"
+)
+
+// ModelMapping stores an alias-to-upstream mapping. Users request using the
+// alias; Mochi resolves it to the upstream model name before forwarding.
+type ModelMapping struct {
+	Id           int    `gorm:"primaryKey" json:"id"`
+	Alias        string `gorm:"uniqueIndex;size:128;not null" json:"alias"`
+	UpstreamName string `gorm:"size:128;not null" json:"upstream_name"`
+	CreatedAt    int64  `json:"created_at"`
+}
+
+// ---------------------------------------------------------------------------
+// In-memory cache: alias -> upstream name
+// ---------------------------------------------------------------------------
+
+var (
+	mappingMu    sync.RWMutex
+	aliasToUp    = make(map[string]string) // alias -> upstream
+	upstreamSet  = make(map[string]bool)   // upstream names that have ≥1 alias
+	aliasList    []string                  // all alias names
+)
+
+// ResolveAlias returns the upstream model name for an alias. O(1) lookup.
+func ResolveAlias(name string) (upstream string, isAlias bool) {
+	mappingMu.RLock()
+	defer mappingMu.RUnlock()
+	up, ok := aliasToUp[name]
+	return up, ok
+}
+
+// GetAllAliases returns all alias names from the cache.
+func GetAllAliases() []string {
+	mappingMu.RLock()
+	defer mappingMu.RUnlock()
+	out := make([]string, len(aliasList))
+	copy(out, aliasList)
+	return out
+}
+
+// GetUpstreamNamesWithAliases returns the set of upstream names that have at
+// least one alias defined. Used to filter /v1/models.
+func GetUpstreamNamesWithAliases() map[string]bool {
+	mappingMu.RLock()
+	defer mappingMu.RUnlock()
+	out := make(map[string]bool, len(upstreamSet))
+	for k, v := range upstreamSet {
+		out[k] = v
+	}
+	return out
+}
+
+// RefreshMappingCache loads all mappings from the database and rebuilds the
+// in-memory cache atomically.
+func RefreshMappingCache() error {
+	var mappings []ModelMapping
+	if err := DB.Find(&mappings).Error; err != nil {
+		return err
+	}
+
+	newAlias := make(map[string]string, len(mappings))
+	newUpstream := make(map[string]bool)
+	newList := make([]string, 0, len(mappings))
+
+	for _, m := range mappings {
+		newAlias[m.Alias] = m.UpstreamName
+		newUpstream[m.UpstreamName] = true
+		newList = append(newList, m.Alias)
+	}
+
+	mappingMu.Lock()
+	aliasToUp = newAlias
+	upstreamSet = newUpstream
+	aliasList = newList
+	mappingMu.Unlock()
+
+	return nil
+}
+
+// ---------------------------------------------------------------------------
+// Database operations
+// ---------------------------------------------------------------------------
+
+// GetAllModelMappings returns every mapping row for the admin listing.
+func GetAllModelMappings() ([]ModelMapping, error) {
+	var mappings []ModelMapping
+	if err := DB.Order("id asc").Find(&mappings).Error; err != nil {
+		return nil, err
+	}
+	return mappings, nil
+}
+
+// CreateModelMapping inserts a new mapping and refreshes the cache.
+func CreateModelMapping(m *ModelMapping) error {
+	m.CreatedAt = time.Now().Unix()
+	if err := DB.Create(m).Error; err != nil {
+		return err
+	}
+	return RefreshMappingCache()
+}
+
+// UpdateModelMapping saves changes to an existing mapping and refreshes the cache.
+func UpdateModelMapping(m *ModelMapping) error {
+	if err := DB.Save(m).Error; err != nil {
+		return err
+	}
+	return RefreshMappingCache()
+}
+
+// DeleteModelMapping removes a mapping by ID and refreshes the cache.
+func DeleteModelMapping(id int) error {
+	if err := DB.Delete(&ModelMapping{}, id).Error; err != nil {
+		return err
+	}
+	return RefreshMappingCache()
+}
