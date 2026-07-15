@@ -32,7 +32,14 @@ func InitDB() error {
 	}
 	// Rows that existed before the status column was added may hold the
 	// zero value instead of the column default; normalize them once.
-	return DB.Model(&User{}).
+	if err := DB.Model(&User{}).
 		Where("status IS NULL OR status = 0").
-		Update("status", StatusEnabled).Error
+		Update("status", StatusEnabled).Error; err != nil {
+		return err
+	}
+	// Existing OpenAI-compatible channels predate explicit Responses
+	// capabilities. Default them to the safer Chat conversion path.
+	return DB.Model(&Channel{}).
+		Where("responses_mode IS NULL OR responses_mode = ''").
+		Update("responses_mode", ChannelResponsesModeChat).Error
 }

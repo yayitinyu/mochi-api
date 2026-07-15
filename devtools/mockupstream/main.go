@@ -41,23 +41,53 @@ func handleResponses(w http.ResponseWriter, r *http.Request) {
 	response["status"] = "in_progress"
 	response["output"] = []any{}
 	response["usage"] = nil
-	created, _ := json.Marshal(map[string]any{"type": "response.created", "response": response})
-	delta, _ := json.Marshal(map[string]any{
-		"type": "response.output_text.delta", "item_id": "msg_mock123", "output_index": 0,
-		"content_index": 0, "delta": "你好，我是 Responses mock！",
+	sequence := 0
+	event := func(eventType string, fields map[string]any) string {
+		fields["type"] = eventType
+		fields["sequence_number"] = sequence
+		sequence++
+		data, _ := json.Marshal(fields)
+		return "event: " + eventType + "\ndata: " + string(data) + "\n\n"
+	}
+	created := event("response.created", map[string]any{"response": response})
+	inProgress := event("response.in_progress", map[string]any{"response": response})
+	messageInProgress := map[string]any{
+		"id": "msg_mock123", "type": "message", "status": "in_progress",
+		"role": "assistant", "content": []any{},
+	}
+	outputAdded := event("response.output_item.added", map[string]any{
+		"output_index": 0, "item": messageInProgress,
+	})
+	emptyPart := map[string]any{"type": "output_text", "text": "", "annotations": []any{}}
+	contentAdded := event("response.content_part.added", map[string]any{
+		"item_id": "msg_mock123", "output_index": 0, "content_index": 0, "part": emptyPart,
+	})
+	delta := event("response.output_text.delta", map[string]any{
+		"item_id": "msg_mock123", "output_index": 0, "content_index": 0,
+		"delta": "你好，我是 Responses mock！",
+	})
+	completedPart := map[string]any{
+		"type": "output_text", "text": "你好，我是 Responses mock！", "annotations": []any{},
+	}
+	textDone := event("response.output_text.done", map[string]any{
+		"item_id": "msg_mock123", "output_index": 0, "content_index": 0,
+		"text": "你好，我是 Responses mock！",
+	})
+	contentDone := event("response.content_part.done", map[string]any{
+		"item_id": "msg_mock123", "output_index": 0, "content_index": 0, "part": completedPart,
+	})
+	completedMessage := map[string]any{
+		"id": "msg_mock123", "type": "message", "status": "completed", "role": "assistant",
+		"content": []any{completedPart},
+	}
+	outputDone := event("response.output_item.done", map[string]any{
+		"output_index": 0, "item": completedMessage,
 	})
 	response["status"] = "completed"
-	response["output"] = []any{map[string]any{
-		"id": "msg_mock123", "type": "message", "status": "completed", "role": "assistant",
-		"content": []any{map[string]any{"type": "output_text", "text": "你好，我是 Responses mock！", "annotations": []any{}}},
-	}}
+	response["output"] = []any{completedMessage}
 	response["usage"] = map[string]any{"input_tokens": 12, "output_tokens": 8, "total_tokens": 20}
-	completed, _ := json.Marshal(map[string]any{"type": "response.completed", "response": response})
-	sse(w,
-		"event: response.created\ndata: "+string(created)+"\n\n",
-		"event: response.output_text.delta\ndata: "+string(delta)+"\n\n",
-		"event: response.completed\ndata: "+string(completed)+"\n\n",
-	)
+	completed := event("response.completed", map[string]any{"response": response})
+	sse(w, created, inProgress, outputAdded, contentAdded, delta, textDone, contentDone, outputDone, completed)
 }
 
 func handleGeminiModels(w http.ResponseWriter, r *http.Request) {

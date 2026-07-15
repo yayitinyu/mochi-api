@@ -99,7 +99,7 @@ func Handle(c *gin.Context, clientFormat Format) {
 	var lastErr error
 	for i := range candidates {
 		rc.channel = &candidates[i]
-		rc.upstreamFormat = upstreamFormatFor(rc.channel.Type, clientFormat)
+		rc.upstreamFormat = upstreamFormatFor(rc.channel, clientFormat)
 		last := i == len(candidates)-1
 
 		upstreamBody, err := prepareUpstreamBody(rc, body)
@@ -497,15 +497,17 @@ func relayUpstreamError(rc *relayContext, resp *http.Response) {
 	writeError(rc.c, rc.clientFormat, resp.StatusCode, "api_error", message)
 }
 
-// upstreamFormatFor maps a channel type to the wire format sent upstream.
-func upstreamFormatFor(channelType string, clientFormat Format) Format {
-	switch channelType {
+// upstreamFormatFor maps a channel and client protocol to the wire format sent
+// upstream. OpenAI-compatible channels use Chat conversion unless native
+// Responses support was explicitly enabled.
+func upstreamFormatFor(channel *model.Channel, clientFormat Format) Format {
+	switch channel.Type {
 	case model.ChannelTypeAnthropic:
 		return FormatClaude
 	case model.ChannelTypeGemini:
 		return FormatGemini
 	default:
-		if clientFormat == FormatResponses {
+		if clientFormat == FormatResponses && channel.UsesNativeResponses() {
 			return FormatResponses
 		}
 		return FormatOpenAI

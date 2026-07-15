@@ -5,7 +5,7 @@
 ## 功能
 
 - **API 聚合转发**：OpenAI Chat Completions（`/v1/chat/completions`）、OpenAI Responses（`/v1/responses`）与 Claude 原生格式（`/v1/messages`），均支持 SSE 流式
-- **跨格式互转**：OpenAI Chat/Responses、Claude、Gemini 三种上游互调；OpenAI 兼容渠道优先原样转发 Responses，请求遇到明确“不支持 Responses”时自动回退到 Chat Completions
+- **跨格式互转**：OpenAI Chat/Responses、Claude、Gemini 三种上游互调；OpenAI 兼容渠道默认将 Responses 安全转换到 Chat Completions，也可为完整兼容的上游显式开启原生 Responses
 - **推理与工具**：保留 `reasoning`、函数工具和 Responses 内置工具参数；Gemini 渠道支持 thought summary / signature 转换，并将 `web_search` 映射为 Google Search grounding
 - **账号系统**：注册 / 登录（cookie 会话 + bcrypt），首位注册用户自动成为管理员
 - **API 密钥管理**：创建、启停、删除，密钥完整值仅创建时展示一次
@@ -81,6 +81,7 @@ cd web && npm run dev
 - **类型**：OpenAI 兼容、Anthropic 兼容 或 Google Gemini
 - **Base URL**：如 `https://api.openai.com`（不含 `/v1` 路径）；Gemini 用 `https://generativelanguage.googleapis.com`
 - **模型**：逗号分隔的模型名列表，或点「获取模型」从上游自动拉取
+- **Responses 兼容模式**：OpenAI 兼容渠道默认使用「Chat 转换」；确认上游完整支持 `/v1/responses` 及其流式事件后，才选择「原生 Responses」
 - **优先级**：数值越大越优先，同级随机
 
 之后用创建的 `sk-` 密钥即可调用，`Authorization: Bearer sk-xxx` 与 `x-api-key: sk-xxx` 两种方式都支持。Gemini 渠道会自动在 OpenAI / Claude 格式与 Gemini 原生格式之间转换。
@@ -100,4 +101,4 @@ curl http://localhost:3000/v1/responses \
   }'
 ```
 
-OpenAI 兼容渠道会先把 Responses 请求体原样发往上游的 `/v1/responses`。若上游明确返回“不支持 Responses 方法”，Mochi 会自动将可移植请求改发到 `/v1/chat/completions`，再把流式或非流式结果转换回 Responses 格式；`previous_response_id` 等无法转换的状态型参数仍需原生 Responses 支持。Gemini 渠道会转换常用输入、函数工具、`reasoning` 和 `web_search`，并清理 Gemini `parameters` 不接受的 JSON Schema 关键字；Anthropic 渠道暂不转换 Responses 内置托管工具，并会返回明确错误。浏览器与 WebView 客户端可直接跨域访问 `/v1`，无需借助第三方 CORS 代理。
+OpenAI 兼容渠道默认把可移植的 Responses 请求改发到上游 `/v1/chat/completions`，再将流式或非流式结果转换回 Responses 格式，避免只有部分 Responses 兼容性的渠道返回残缺 SSE 事件。若渠道已在管理页显式选择「原生 Responses」，Mochi 才会原样请求上游 `/v1/responses`；该端点明确报告不支持时仍会自动回退。`previous_response_id`、托管工具等无法完整转换的状态型或原生能力需要启用原生 Responses。Gemini 渠道会转换常用输入、函数工具、`reasoning` 和 `web_search`，并清理 Gemini `parameters` 不接受的 JSON Schema 关键字；Anthropic 渠道暂不转换 Responses 内置托管工具，并会返回明确错误。浏览器与 WebView 客户端可直接跨域访问 `/v1`，无需借助第三方 CORS 代理。

@@ -119,6 +119,88 @@ func TestOpenAIChatStreamConvertsToResponsesEvents(t *testing.T) {
 	require.Equal(t, 2, gotUsage.completion)
 }
 
+func TestDefaultOpenAIChannelRoutesResponsesThroughChatConversion(t *testing.T) {
+	setupRelayDB(t)
+	var gotPath string
+	var gotRequestBody []byte
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotPath = r.URL.Path
+		gotRequestBody, _ = io.ReadAll(r.Body)
+		w.Header().Set("Content-Type", "text/event-stream")
+		_, _ = io.WriteString(w,
+			`data: {"choices":[{"delta":{"role":"assistant"},"finish_reason":null}]}`+"\n\n"+
+				`data: {"choices":[{"delta":{"content":"Converted answer"},"finish_reason":"stop"}]}`+"\n\n"+
+				`data: {"choices":[],"usage":{"prompt_tokens":4,"completion_tokens":2,"total_tokens":6}}`+"\n\n"+
+				`data: [DONE]`+"\n\n")
+	}))
+	defer upstream.Close()
+
+	channel := &model.Channel{
+		Name: "chat-only", Type: model.ChannelTypeOpenAI, BaseURL: upstream.URL,
+		Models: "chat-only-model", Status: model.StatusEnabled,
+	}
+	require.NoError(t, model.CreateChannel(channel))
+	t.Cleanup(func() { markChannelSuccess(channel.Id) })
+
+	gin.SetMode(gin.TestMode)
+	recorder := httptest.NewRecorder()
+	context, _ := gin.CreateTestContext(recorder)
+	context.Request = httptest.NewRequest(http.MethodPost, "/v1/responses",
+		strings.NewReader(`{"model":"chat-only-model","input":"hello","stream":true}`))
+	context.Request.Header.Set("Content-Type", "application/json")
+	Handle(context, FormatResponses)
+
+	require.Equal(t, http.StatusOK, recorder.Code, recorder.Body.String())
+	require.Equal(t, "/v1/chat/completions", gotPath)
+	require.Equal(t, "hello", gjson.GetBytes(gotRequestBody, "messages.0.content").String())
+	require.True(t, gjson.GetBytes(gotRequestBody, "stream_options.include_usage").Bool())
+
+	body := recorder.Body.String()
+	outputAdded := strings.Index(body, "event: response.output_item.added")
+	contentAdded := strings.Index(body, "event: response.content_part.added")
+	delta := strings.Index(body, "event: response.output_text.delta")
+	require.GreaterOrEqual(t, outputAdded, 0)
+	require.Greater(t, contentAdded, outputAdded)
+	require.Greater(t, delta, contentAdded)
+	require.Contains(t, body, "event: response.output_item.done")
+	require.Contains(t, body, "event: response.completed")
+}
+
+func TestNativeOpenAIChannelForwardsResponsesDirectly(t *testing.T) {
+	setupRelayDB(t)
+	var gotPath string
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotPath = r.URL.Path
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = io.WriteString(w, `{
+			"id":"resp-native","object":"response","created_at":1700000000,
+			"status":"completed","model":"native-model","output":[],
+			"usage":{"input_tokens":1,"output_tokens":0,"total_tokens":1}
+		}`)
+	}))
+	defer upstream.Close()
+
+	channel := &model.Channel{
+		Name: "native", Type: model.ChannelTypeOpenAI, BaseURL: upstream.URL,
+		Models: "native-model", ResponsesMode: model.ChannelResponsesModeNative,
+		Status: model.StatusEnabled,
+	}
+	require.NoError(t, model.CreateChannel(channel))
+	t.Cleanup(func() { markChannelSuccess(channel.Id) })
+
+	gin.SetMode(gin.TestMode)
+	recorder := httptest.NewRecorder()
+	context, _ := gin.CreateTestContext(recorder)
+	context.Request = httptest.NewRequest(http.MethodPost, "/v1/responses",
+		strings.NewReader(`{"model":"native-model","input":"hello"}`))
+	context.Request.Header.Set("Content-Type", "application/json")
+	Handle(context, FormatResponses)
+
+	require.Equal(t, http.StatusOK, recorder.Code, recorder.Body.String())
+	require.Equal(t, "/v1/responses", gotPath)
+	require.Equal(t, "resp-native", gjson.Get(recorder.Body.String(), "id").String())
+}
+
 func TestUnsupportedResponsesMethodRetriesChatCompletions(t *testing.T) {
 	var paths []string
 	var chatBody []byte
@@ -472,5 +554,3 @@ func TestDecodeToolCallIDIgnoresPlainOpenAIIds(t *testing.T) {
 	require.Equal(t, "web_search", name)
 	require.Equal(t, "abc|def", sig)
 }
-
-

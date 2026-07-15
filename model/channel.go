@@ -9,6 +9,9 @@ const (
 	ChannelTypeOpenAI    = "openai"
 	ChannelTypeAnthropic = "anthropic"
 	ChannelTypeGemini    = "gemini"
+
+	ChannelResponsesModeChat   = "chat"
+	ChannelResponsesModeNative = "native"
 )
 
 type Channel struct {
@@ -18,6 +21,10 @@ type Channel struct {
 	BaseURL string `json:"base_url"`            // e.g. https://api.openai.com; a trailing "/" marks a full API prefix, a trailing "#" marks an exact endpoint URL
 	ApiKey  string `json:"api_key"`
 	Models  string `json:"models"` // comma-joined model names
+	// ResponsesMode controls how OpenAI-compatible channels serve downstream
+	// Responses requests. Chat conversion is the safe default; native mode is
+	// opt-in for upstreams with a complete /v1/responses implementation.
+	ResponsesMode string `gorm:"size:16;not null;default:chat" json:"responses_mode"`
 	// Icon is either a preset icon key (e.g. "deepseek") or an image URL
 	// for custom channels; the frontend resolves it.
 	Icon      string `gorm:"size:512" json:"icon"`
@@ -46,6 +53,13 @@ func (ch *Channel) SupportsModel(model string) bool {
 		}
 	}
 	return false
+}
+
+// UsesNativeResponses reports whether this channel should receive Responses
+// requests directly. Unknown and legacy empty values intentionally fall back
+// to Chat Completions conversion.
+func (ch *Channel) UsesNativeResponses() bool {
+	return ch.Type == ChannelTypeOpenAI && ch.ResponsesMode == ChannelResponsesModeNative
 }
 
 func GetAllChannels() ([]Channel, error) {
@@ -122,7 +136,7 @@ func CreateChannel(channel *Channel) error {
 
 func UpdateChannel(channel *Channel) error {
 	return DB.Model(channel).
-		Select("name", "type", "base_url", "api_key", "models", "icon", "priority", "status").
+		Select("name", "type", "base_url", "api_key", "models", "responses_mode", "icon", "priority", "status").
 		Updates(channel).Error
 }
 

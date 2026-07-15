@@ -12,14 +12,15 @@ import (
 )
 
 type channelRequest struct {
-	Name     string `json:"name"`
-	Type     string `json:"type"`
-	BaseURL  string `json:"base_url"`
-	ApiKey   string `json:"api_key"`
-	Models   string `json:"models"`
-	Icon     string `json:"icon"`
-	Priority int    `json:"priority"`
-	Status   int    `json:"status"`
+	Name          string `json:"name"`
+	Type          string `json:"type"`
+	BaseURL       string `json:"base_url"`
+	ApiKey        string `json:"api_key"`
+	Models        string `json:"models"`
+	ResponsesMode string `json:"responses_mode"`
+	Icon          string `json:"icon"`
+	Priority      int    `json:"priority"`
+	Status        int    `json:"status"`
 }
 
 func (req *channelRequest) validate() string {
@@ -32,6 +33,7 @@ func (req *channelRequest) validate() string {
 		req.BaseURL = strings.TrimSuffix(req.BaseURL, "/")
 	}
 	req.Models = strings.TrimSpace(req.Models)
+	req.ResponsesMode = strings.ToLower(strings.TrimSpace(req.ResponsesMode))
 	req.Icon = strings.TrimSpace(req.Icon)
 	if req.Name == "" {
 		return "名称不能为空"
@@ -39,6 +41,17 @@ func (req *channelRequest) validate() string {
 	if req.Type != model.ChannelTypeOpenAI && req.Type != model.ChannelTypeAnthropic &&
 		req.Type != model.ChannelTypeGemini {
 		return "类型必须是 openai、anthropic 或 gemini"
+	}
+	if req.Type != model.ChannelTypeOpenAI {
+		req.ResponsesMode = model.ChannelResponsesModeChat
+	} else {
+		if req.ResponsesMode == "" {
+			req.ResponsesMode = model.ChannelResponsesModeChat
+		}
+		if req.ResponsesMode != model.ChannelResponsesModeChat &&
+			req.ResponsesMode != model.ChannelResponsesModeNative {
+			return "Responses 模式必须是 chat 或 native"
+		}
 	}
 	if !strings.HasPrefix(req.BaseURL, "http://") && !strings.HasPrefix(req.BaseURL, "https://") {
 		return "Base URL 必须以 http:// 或 https:// 开头"
@@ -79,7 +92,8 @@ func CreateChannel(c *gin.Context) {
 	}
 	channel := &model.Channel{
 		Name: req.Name, Type: req.Type, BaseURL: req.BaseURL, ApiKey: req.ApiKey,
-		Models: req.Models, Icon: req.Icon, Priority: req.Priority, Status: req.Status,
+		Models: req.Models, ResponsesMode: req.ResponsesMode, Icon: req.Icon,
+		Priority: req.Priority, Status: req.Status,
 		CreatedAt: time.Now().Unix(),
 	}
 	if err := model.CreateChannel(channel); err != nil {
@@ -111,6 +125,7 @@ func UpdateChannel(c *gin.Context) {
 	}
 	channel.Name, channel.Type, channel.BaseURL = req.Name, req.Type, req.BaseURL
 	channel.ApiKey, channel.Models, channel.Icon = req.ApiKey, req.Models, req.Icon
+	channel.ResponsesMode = req.ResponsesMode
 	channel.Priority, channel.Status = req.Priority, req.Status
 	if err := model.UpdateChannel(channel); err != nil {
 		respondError(c, http.StatusInternalServerError, "更新失败")

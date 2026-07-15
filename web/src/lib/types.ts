@@ -3,6 +3,8 @@ export const ROLE_USER = 1;
 export const STATUS_ENABLED = 1;
 export const STATUS_DISABLED = 2;
 
+export type ResponsesMode = 'chat' | 'native';
+
 export interface User {
   id: number;
   username: string;
@@ -42,6 +44,7 @@ export interface Channel {
   base_url: string;
   api_key: string;
   models: string;
+  responses_mode: ResponsesMode;
   icon: string;
   priority: number;
   status: number;

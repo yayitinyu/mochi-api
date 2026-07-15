@@ -93,6 +93,64 @@ func TestUpstreamTargetBaseURLConventions(t *testing.T) {
 	}
 }
 
+func TestUpstreamFormatForResponsesCapability(t *testing.T) {
+	tests := []struct {
+		name         string
+		channel      model.Channel
+		clientFormat Format
+		want         Format
+	}{
+		{
+			name:         "legacy OpenAI channel defaults to Chat conversion",
+			channel:      model.Channel{Type: model.ChannelTypeOpenAI},
+			clientFormat: FormatResponses,
+			want:         FormatOpenAI,
+		},
+		{
+			name: "explicit Chat mode converts Responses",
+			channel: model.Channel{
+				Type: model.ChannelTypeOpenAI, ResponsesMode: model.ChannelResponsesModeChat,
+			},
+			clientFormat: FormatResponses,
+			want:         FormatOpenAI,
+		},
+		{
+			name: "explicit native mode forwards Responses",
+			channel: model.Channel{
+				Type: model.ChannelTypeOpenAI, ResponsesMode: model.ChannelResponsesModeNative,
+			},
+			clientFormat: FormatResponses,
+			want:         FormatResponses,
+		},
+		{
+			name: "native Responses capability does not change Chat requests",
+			channel: model.Channel{
+				Type: model.ChannelTypeOpenAI, ResponsesMode: model.ChannelResponsesModeNative,
+			},
+			clientFormat: FormatOpenAI,
+			want:         FormatOpenAI,
+		},
+		{
+			name:         "Anthropic keeps native wire format",
+			channel:      model.Channel{Type: model.ChannelTypeAnthropic},
+			clientFormat: FormatResponses,
+			want:         FormatClaude,
+		},
+		{
+			name:         "Gemini keeps native wire format",
+			channel:      model.Channel{Type: model.ChannelTypeGemini},
+			clientFormat: FormatResponses,
+			want:         FormatGemini,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			require.Equal(t, tt.want, upstreamFormatFor(&tt.channel, tt.clientFormat))
+		})
+	}
+}
+
 func TestModelsURLFromExact(t *testing.T) {
 	require.Equal(t, "https://x.com/api/models",
 		modelsURLFromExact("https://x.com/api/chat/completions"))

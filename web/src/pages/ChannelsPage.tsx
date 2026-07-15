@@ -9,7 +9,7 @@ import {
   XIcon,
 } from '@phosphor-icons/react';
 import { api, ApiError } from '../lib/api';
-import type { Channel } from '../lib/types';
+import type { Channel, ResponsesMode } from '../lib/types';
 import { Button } from '../components/Button';
 import { Card } from '../components/Card';
 import { Field, Input, Select } from '../components/Field';
@@ -26,6 +26,7 @@ interface Form {
   base_url: string;
   api_key: string;
   models: string;
+  responses_mode: ResponsesMode;
   icon: string;
   priority: number | '';
   status: number;
@@ -39,6 +40,7 @@ const empty: Form = {
   base_url: '',
   api_key: '',
   models: '',
+  responses_mode: 'chat',
   icon: '',
   priority: '',
   status: 1,
@@ -82,7 +84,7 @@ export function ChannelsPage() {
   }
   function openEdit(ch: Channel) {
     setEditing(ch);
-    setForm({ ...ch, api_key: '' });
+    setForm({ ...ch, api_key: '', responses_mode: ch.responses_mode || 'chat' });
     setPreset('custom');
     setAvailableModels([]);
     setSelectedModels(new Set());
@@ -106,6 +108,7 @@ export function ChannelsPage() {
         name: nameIsAuto ? p.label : f.name,
         type: p.type,
         base_url: p.baseUrl,
+        responses_mode: p.type === 'openai' ? f.responses_mode : 'chat',
         icon: p.icon,
       };
     });
@@ -298,10 +301,17 @@ export function ChannelsPage() {
                     </div>
                   </td>
                   <td className="px-4 py-3.5">
-                    <span className="inline-flex items-center gap-1.5 rounded-full bg-sky/15 px-2.5 py-0.5 text-xs font-bold text-sky">
-                      <ProviderIcon type={ch.type} size={13} />
-                      {ch.type === 'anthropic' ? 'Anthropic' : ch.type === 'gemini' ? 'Gemini' : 'OpenAI'}
-                    </span>
+                    <div className="flex flex-col items-start gap-1">
+                      <span className="inline-flex items-center gap-1.5 rounded-full bg-sky/15 px-2.5 py-0.5 text-xs font-bold text-sky">
+                        <ProviderIcon type={ch.type} size={13} />
+                        {ch.type === 'anthropic' ? 'Anthropic' : ch.type === 'gemini' ? 'Gemini' : 'OpenAI'}
+                      </span>
+                      {ch.type === 'openai' && (
+                        <span className="whitespace-nowrap text-[11px] font-bold text-ink-soft">
+                          {ch.responses_mode === 'native' ? '原生 Responses' : 'Chat 转换'}
+                        </span>
+                      )}
+                    </div>
                   </td>
                   <td className="max-w-[16rem] px-4 py-3.5">
                     <div className="flex flex-wrap gap-1">
@@ -396,7 +406,17 @@ export function ChannelsPage() {
           </Field>
           <div className="grid grid-cols-2 gap-3">
             <Field label="类型">
-              <Select value={form.type} onChange={(e) => setForm({ ...form, type: e.target.value })}>
+              <Select
+                value={form.type}
+                onChange={(e) => {
+                  const type = e.target.value;
+                  setForm((current) => ({
+                    ...current,
+                    type,
+                    responses_mode: type === 'openai' ? current.responses_mode : 'chat',
+                  }));
+                }}
+              >
                 <option value="openai">OpenAI 兼容</option>
                 <option value="anthropic">Anthropic 兼容</option>
                 <option value="gemini">Google Gemini</option>
@@ -414,6 +434,25 @@ export function ChannelsPage() {
               />
             </Field>
           </div>
+          {form.type === 'openai' && (
+            <Field
+              label="Responses 兼容模式"
+              hint="默认通过 Chat Completions 转换，兼容多数渠道；仅在上游完整支持 /v1/responses（包括流式事件）时选择原生模式"
+            >
+              <Select
+                value={form.responses_mode}
+                onChange={(e) =>
+                  setForm((current) => ({
+                    ...current,
+                    responses_mode: e.target.value as ResponsesMode,
+                  }))
+                }
+              >
+                <option value="chat">Chat 转换（推荐）</option>
+                <option value="native">原生 Responses</option>
+              </Select>
+            </Field>
+          )}
           <Field
             label="Base URL"
             hint={
