@@ -95,6 +95,8 @@ export function ProviderIcon({ type, size = 16 }: { type: string; size?: number 
   );
 }
 
+const KimiAvatar = ({ size = 16 }: { size?: number }) => <Kimi.Avatar size={size} />;
+
 // Preset icon key -> official brand icon (see channelPresets.ts).
 const CHANNEL_ICONS: Record<string, BrandIcon> = {
   openai: OpenAI,
@@ -110,7 +112,7 @@ const CHANNEL_ICONS: Record<string, BrandIcon> = {
   nvidia: Nvidia,
   github: Github,
   deepseek: DeepSeek,
-  kimi: Kimi,
+  kimi: KimiAvatar,
   qwen: Qwen,
   zhipu: Zhipu,
   zai: ZAI,
