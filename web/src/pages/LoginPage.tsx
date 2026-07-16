@@ -12,6 +12,7 @@ export function LoginPage() {
   const navigate = useNavigate();
   const [mode, setMode] = useState<'login' | 'register'>('login');
   const [registerMode, setRegisterMode] = useState<RegisterMode>('open');
+  const [bootstrapPending, setBootstrapPending] = useState(false);
   const [username, setUsername] = useState('');
   const [password, setPassword] = useState('');
   const [inviteCode, setInviteCode] = useState('');
@@ -23,8 +24,14 @@ export function LoginPage() {
     // backend still enforces the real mode on submit.
     api
       .get<SiteStatus>('/api/status')
-      .then((s) => setRegisterMode(s.register_mode))
-      .catch(() => setRegisterMode('open'));
+      .then((s) => {
+        setRegisterMode(s.register_mode);
+        setBootstrapPending(s.bootstrap_pending);
+      })
+      .catch(() => {
+        setRegisterMode('open');
+        setBootstrapPending(false);
+      });
   }, []);
 
   const registerClosed = registerMode === 'closed';
@@ -51,15 +58,15 @@ export function LoginPage() {
   }
 
   return (
-    <div className="grid min-h-[100dvh] place-items-center p-4">
-      <div className="w-full max-w-sm">
-        <div className="mb-6 text-center">
+    <div className="flex min-h-[100dvh] w-full items-start justify-center overflow-x-hidden px-3 py-6 sm:items-center sm:p-6">
+      <div className="w-full min-w-0 max-w-sm">
+        <div className="mb-5 text-center sm:mb-6">
           <Logo size={64} className="mx-auto mb-3 drop-shadow-lg" />
           <h1 className="text-2xl font-extrabold text-ink">Mochi</h1>
           <p className="text-sm text-ink-soft">柔软又可靠的 API 聚合网关</p>
         </div>
 
-        <div className="rounded-3xl border border-white bg-surface/85 dark:border-white/10 p-6 shadow-xl backdrop-blur">
+        <div className="min-w-0 rounded-3xl border border-white bg-surface/85 p-4 shadow-xl backdrop-blur sm:p-6 dark:border-white/10">
           {!registerClosed && (
             <div className="mb-5 flex rounded-full bg-sakura-50 p-1 dark:bg-sakura-500/10">
               {(['login', 'register'] as const).map((m) => (
@@ -82,6 +89,7 @@ export function LoginPage() {
           <form onSubmit={submit} className="flex flex-col gap-4">
             <Field label="用户名">
               <Input
+                className="w-full min-w-0"
                 value={username}
                 onChange={(e) => setUsername(e.target.value)}
                 placeholder="请输入用户名"
@@ -91,6 +99,7 @@ export function LoginPage() {
             </Field>
             <Field label="密码" hint={effectiveMode === 'register' ? '至少 8 位字符' : undefined}>
               <Input
+                className="w-full min-w-0"
                 type="password"
                 value={password}
                 onChange={(e) => setPassword(e.target.value)}
@@ -102,6 +111,7 @@ export function LoginPage() {
             {effectiveMode === 'register' && registerMode === 'invite' && (
               <Field label="邀请码" hint="本站开启了邀请码注册，请向管理员索取">
                 <Input
+                  className="w-full min-w-0"
                   value={inviteCode}
                   onChange={(e) => setInviteCode(e.target.value)}
                   placeholder="请输入邀请码"
@@ -123,9 +133,11 @@ export function LoginPage() {
           </form>
         </div>
 
-        <p className="mt-4 text-center text-xs text-ink-soft">
-          {registerClosed ? '本站已关闭注册' : '首位注册的用户将成为管理员'}
-        </p>
+        {registerClosed ? (
+          <p className="mt-4 text-center text-xs text-ink-soft">本站已关闭注册</p>
+        ) : bootstrapPending ? (
+          <p className="mt-4 text-center text-xs text-ink-soft">首位注册的用户将成为管理员</p>
+        ) : null}
       </div>
     </div>
   );

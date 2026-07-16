@@ -224,13 +224,18 @@ func TestUserManagementByAdmin(t *testing.T) {
 
 func TestPublicStatusAndSettings(t *testing.T) {
 	server := newTestServer(t)
-	rec := register(t, server, "admin", "password123", "")
+	rec := doJSON(t, server, http.MethodGet, "/api/status", nil, nil)
+	require.Equal(t, http.StatusOK, rec.Code)
+	require.Equal(t, true, responseData(t, rec)["bootstrap_pending"])
+
+	rec = register(t, server, "admin", "password123", "")
 	require.Equal(t, http.StatusOK, rec.Code)
 	cookies := rec.Result().Cookies()
 
 	rec = doJSON(t, server, http.MethodGet, "/api/status", nil, nil)
 	require.Equal(t, http.StatusOK, rec.Code)
 	require.Equal(t, "open", responseData(t, rec)["register_mode"])
+	require.Equal(t, false, responseData(t, rec)["bootstrap_pending"])
 
 	rec = doJSON(t, server, http.MethodPut, "/api/settings", gin.H{"register_mode": "invite"}, cookies)
 	require.Equal(t, http.StatusOK, rec.Code)

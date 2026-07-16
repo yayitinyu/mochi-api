@@ -17,6 +17,7 @@ export type RegisterMode = 'open' | 'invite' | 'closed';
 
 export interface SiteStatus {
   register_mode: RegisterMode;
+  bootstrap_pending: boolean;
 }
 
 export interface InviteCode {
