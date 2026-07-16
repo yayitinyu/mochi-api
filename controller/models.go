@@ -25,6 +25,12 @@ func ListRelayModels(c *gin.Context) {
 	hidden := model.GetUpstreamNamesWithAliases()
 	aliases := model.GetAllAliases()
 
+	// Also hide the alias names themselves from the first loop to prevent
+	// duplicates if a channel natively lists a model name that matches an alias.
+	for _, alias := range aliases {
+		hidden[alias] = true
+	}
+
 	now := time.Now().Unix()
 	data := make([]gin.H, 0, len(models)+len(aliases))
 	for _, m := range models {
