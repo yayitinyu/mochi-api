@@ -708,22 +708,31 @@ func streamGeminiToClaude(rc *relayContext, resp *http.Response) usage {
 	return u
 }
 
-// encodeToolCallID packages the function name and thought signature into a single
-// OpenAI-compatible tool call ID. Standard clients will echo this ID back to us,
-// which is how we recover both fields after clients strip extra_content.
+const encodedToolCallIDV2Prefix = "call_m2_"
+
+// encodeToolCallID packages the function name and thought signature into a
+// unique OpenAI-compatible tool call ID. Standard clients echo this ID back to
+// us, which is how we recover both fields after they strip extra_content.
 func encodeToolCallID(name, signature string) string {
 	data := name + "|" + signature
 	encoded := base64.RawURLEncoding.EncodeToString([]byte(data))
-	return "call_" + encoded
+	return encodedToolCallIDV2Prefix + common.GenerateKey(8) + "_" + encoded
 }
 
 // decodeToolCallID extracts the function name and thought signature from an encoded ID.
+// It accepts both the nonce-bearing v2 format and the legacy deterministic
+// call_<base64(name|signature)> format so existing conversations still replay.
 // Returns empty strings when the id is not one we produced (e.g. a plain OpenAI id).
 func decodeToolCallID(id string) (string, string) {
-	if !strings.HasPrefix(id, "call_") {
+	var encoded string
+	if strings.HasPrefix(id, encodedToolCallIDV2Prefix) {
+		payload := strings.TrimPrefix(id, encodedToolCallIDV2Prefix)
+		_, encoded, _ = strings.Cut(payload, "_")
+	} else if strings.HasPrefix(id, "call_") {
+		encoded = strings.TrimPrefix(id, "call_")
+	} else {
 		return "", ""
 	}
-	encoded := strings.TrimPrefix(id, "call_")
 	if encoded == "" {
 		return "", ""
 	}
@@ -740,4 +749,3 @@ func decodeToolCallID(id string) (string, string) {
 	}
 	return name, signature
 }
-

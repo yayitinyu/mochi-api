@@ -14,6 +14,19 @@ import (
 	"mochi-api/model"
 )
 
+func openAIStreamToolCallID(body string) string {
+	for _, line := range strings.Split(body, "\n") {
+		payload, ok := strings.CutPrefix(line, "data: ")
+		if !ok || payload == "[DONE]" {
+			continue
+		}
+		if id := gjson.Get(payload, "choices.0.delta.tool_calls.0.id").String(); id != "" {
+			return id
+		}
+	}
+	return ""
+}
+
 func TestResponsesRequestConvertsReasoningAndWebSearchForGemini(t *testing.T) {
 	responsesBody := []byte(`{
 		"model":"gemini-3-flash-preview",
@@ -117,6 +130,35 @@ func TestOpenAIChatStreamConvertsToResponsesEvents(t *testing.T) {
 	require.NotContains(t, body, `"type":"reasoning"`)
 	require.Equal(t, 4, gotUsage.prompt)
 	require.Equal(t, 2, gotUsage.completion)
+}
+
+func TestResponseStreamKeepsRepeatedToolCallsUnique(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	recorder := httptest.NewRecorder()
+	context, _ := gin.CreateTestContext(recorder)
+	stream := newResponseStream(&relayContext{c: context, modelName: "deepseek-chat"})
+
+	stream.addFunctionCall("call_deepseek_1", "parse_link", `{}`, "")
+	stream.addFunctionCall("call_deepseek_2", "parse_link", `{}`, "")
+
+	first := stream.output[0].(map[string]any)["call_id"].(string)
+	second := stream.output[1].(map[string]any)["call_id"].(string)
+	require.Equal(t, "call_deepseek_1", first)
+	require.Equal(t, "call_deepseek_2", second)
+	require.NotEqual(t, first, second)
+
+	stream.addFunctionCall("", "parse_link", `{}`, "")
+	stream.addFunctionCall("", "parse_link", `{}`, "")
+
+	third := stream.output[2].(map[string]any)["call_id"].(string)
+	fourth := stream.output[3].(map[string]any)["call_id"].(string)
+	require.NotEqual(t, third, fourth)
+	for _, id := range []string{third, fourth} {
+		require.LessOrEqual(t, len(id), 64)
+		name, signature := decodeToolCallID(id)
+		require.Equal(t, "parse_link", name)
+		require.Empty(t, signature)
+	}
 }
 
 func TestDefaultOpenAIChannelRoutesResponsesThroughChatConversion(t *testing.T) {
@@ -275,8 +317,10 @@ func TestGeminiThoughtsAndSignaturesBecomeOpenAIExtensions(t *testing.T) {
 	require.Equal(t, "reason-sig", gjson.GetBytes(converted, "choices.0.message.extra_content.google.thought_signature").String())
 	// Native Gemini ids are replaced with an encoded id that preserves name+signature
 	// for clients that strip extra_content on the next turn.
-	expectedID := encodeToolCallID("lookup", "tool-sig")
-	require.Equal(t, expectedID, gjson.GetBytes(converted, "choices.0.message.tool_calls.0.id").String())
+	toolCallID := gjson.GetBytes(converted, "choices.0.message.tool_calls.0.id").String()
+	name, signature := decodeToolCallID(toolCallID)
+	require.Equal(t, "lookup", name)
+	require.Equal(t, "tool-sig", signature)
 	require.Equal(t, "tool-sig", gjson.GetBytes(converted, "choices.0.message.tool_calls.0.extra_content.google.thought_signature").String())
 	require.Equal(t, int64(12), gjson.GetBytes(converted, "usage.completion_tokens").Int())
 	require.Equal(t, int64(5), gjson.GetBytes(converted, "usage.completion_tokens_details.reasoning_tokens").Int())
@@ -422,9 +466,12 @@ func TestGeminiToolCallStreamAccumulatesThoughtSignature(t *testing.T) {
 	_ = streamGeminiToOpenAI(rc, upstream)
 	body := recorder.Body.String()
 
-	// The tool call ID should be encoded from "default_api:web_search" and "sig-123"
-	expectedID := encodeToolCallID("default_api:web_search", "sig-123")
-	require.Contains(t, body, `"id":"`+expectedID+`"`)
+	// The tool call ID should preserve the function metadata and remain unique.
+	toolCallID := openAIStreamToolCallID(body)
+	require.NotEmpty(t, toolCallID)
+	name, signature := decodeToolCallID(toolCallID)
+	require.Equal(t, "default_api:web_search", name)
+	require.Equal(t, "sig-123", signature)
 	require.Contains(t, body, `"name":"default_api:web_search"`)
 	require.Contains(t, body, `"thought_signature":"sig-123"`)
 }
@@ -489,7 +536,9 @@ func TestGeminiNativeFunctionCallIDStillEncodesSignature(t *testing.T) {
 	require.NoError(t, err)
 
 	toolCallID := gjson.GetBytes(openaiBytes, "choices.0.message.tool_calls.0.id").String()
-	require.Equal(t, encodeToolCallID("default_api:web_search", "sig-native-42"), toolCallID)
+	name, signature := decodeToolCallID(toolCallID)
+	require.Equal(t, "default_api:web_search", name)
+	require.Equal(t, "sig-native-42", signature)
 	require.NotEqual(t, "native-fc-42", toolCallID)
 
 	// Client replays history without extra_content (common OpenAI-compatible behavior).
@@ -539,18 +588,30 @@ func TestGeminiStreamNativeFunctionCallIDEncodesSignature(t *testing.T) {
 
 	_ = streamGeminiToOpenAI(rc, upstream)
 	body := recorder.Body.String()
-	expectedID := encodeToolCallID("lookup", "stream-sig-9")
-	require.Contains(t, body, `"id":"`+expectedID+`"`)
+	toolCallID := openAIStreamToolCallID(body)
+	require.NotEmpty(t, toolCallID)
+	name, signature := decodeToolCallID(toolCallID)
+	require.Equal(t, "lookup", name)
+	require.Equal(t, "stream-sig-9", signature)
 	require.Contains(t, body, `"thought_signature":"stream-sig-9"`)
 	require.NotContains(t, body, `"id":"native-stream-1"`)
 }
 
-func TestDecodeToolCallIDIgnoresPlainOpenAIIds(t *testing.T) {
+func TestToolCallIDCodecIsUniqueAndBackwardCompatible(t *testing.T) {
 	name, sig := decodeToolCallID("call_AbCdEfGhIjKlMnOp")
 	require.Equal(t, "", name)
 	require.Equal(t, "", sig)
 
-	name, sig = decodeToolCallID(encodeToolCallID("web_search", "abc|def"))
-	require.Equal(t, "web_search", name)
-	require.Equal(t, "abc|def", sig)
+	first := encodeToolCallID("web_search", "abc|def")
+	second := encodeToolCallID("web_search", "abc|def")
+	require.NotEqual(t, first, second)
+	for _, id := range []string{first, second} {
+		name, sig = decodeToolCallID(id)
+		require.Equal(t, "web_search", name)
+		require.Equal(t, "abc|def", sig)
+	}
+
+	name, sig = decodeToolCallID("call_cGFyc2VfbGlua3w")
+	require.Equal(t, "parse_link", name)
+	require.Empty(t, sig)
 }

@@ -381,9 +381,9 @@ func (s *responseStream) addText(text string) {
 }
 
 func (s *responseStream) addFunctionCall(callID, name, arguments, signature string) {
-	// Prefer an id that already embeds name+signature (from the Gemini→OpenAI
-	// bridge). Otherwise encode now so clients that drop extra_content can still
-	// round-trip both fields via call_id alone.
+	// Preserve provider-generated IDs unless we need to carry a Gemini thought
+	// signature. Replacing a valid ID with an encoding of name+signature makes
+	// repeated calls to the same function collide when the signature is empty.
 	if decodedName, decodedSig := decodeToolCallID(callID); decodedName != "" {
 		if name == "" {
 			name = decodedName
@@ -391,7 +391,7 @@ func (s *responseStream) addFunctionCall(callID, name, arguments, signature stri
 		if signature == "" {
 			signature = decodedSig
 		}
-	} else {
+	} else if callID == "" || signature != "" {
 		callID = encodeToolCallID(name, signature)
 	}
 	index := len(s.output)
