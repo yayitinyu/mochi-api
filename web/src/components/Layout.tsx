@@ -1,7 +1,6 @@
 import { useState, useEffect, type ReactNode } from 'react';
 import { ListIcon, XIcon } from '@phosphor-icons/react';
 import { Sidebar } from './Sidebar';
-import { Logo } from './Logo';
 
 export function Layout({ title, children }: { title: string; children: ReactNode }) {
   const [drawerOpen, setDrawerOpen] = useState(false);
@@ -42,8 +41,13 @@ export function Layout({ title, children }: { title: string; children: ReactNode
         >
           <ListIcon size={22} weight="bold" />
         </button>
-        <Logo size={28} />
-        <span className="text-base font-extrabold text-ink">Mochi</span>
+        <img
+          src="/mochi-wordmark.svg"
+          alt="Mochi"
+          width={115}
+          height={40}
+          className="h-8 w-auto"
+        />
       </header>
 
       {/* Drawer on mobile */}
