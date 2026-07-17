@@ -282,8 +282,6 @@ func convertRequestOpenAIToGemini(body []byte) ([]byte, error) {
 	return json.Marshal(out)
 }
 
-
-
 // sanitizeGeminiSchema removes JSON Schema keywords that Gemini's
 // FunctionDeclaration.parameters field does not accept. OpenAI-compatible
 // clients commonly attach these keywords at every nested object level.
@@ -442,7 +440,6 @@ func geminiCandidateToOpenAI(candidate gjson.Result) (string, string, []map[stri
 	}
 	return text.String(), reasoning.String(), toolCalls, messageExtra
 }
-
 
 // --- non-stream response: Gemini -> OpenAI ---
 

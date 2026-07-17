@@ -32,10 +32,10 @@ type ModelMapping struct {
 // ---------------------------------------------------------------------------
 
 var (
-	mappingMu    sync.RWMutex
-	aliasToUp    = make(map[string]string) // alias -> upstream list string
-	upstreamSet  = make(map[string]bool)   // upstream names that have ≥1 alias
-	aliasList    []string                  // all alias names
+	mappingMu   sync.RWMutex
+	aliasToUp   = make(map[string]string) // alias -> upstream list string
+	upstreamSet = make(map[string]bool)   // upstream names that have ≥1 alias
+	aliasList   []string                  // all alias names
 )
 
 // ResolveAlias returns the upstream model name for an alias. O(1) lookup.

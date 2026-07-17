@@ -78,7 +78,7 @@ func validateMapping(m *model.ModelMapping) string {
 	if strings.Contains(m.Alias, ",") {
 		return "别名不能包含逗号"
 	}
-	
+
 	upstreams := model.ParseModelList(m.UpstreamName)
 	if len(upstreams) == 0 {
 		return "上游模型名称不能为空"
