@@ -62,10 +62,13 @@ func convertRequestOpenAIToClaude(body []byte) ([]byte, error) {
 		"model":      root.Get("model").String(),
 		"max_tokens": defaultClaudeMaxTokens,
 	}
+	explicitMaxTokens := false
 	if v := root.Get("max_tokens"); v.Exists() {
 		out["max_tokens"] = v.Int()
+		explicitMaxTokens = true
 	} else if v := root.Get("max_completion_tokens"); v.Exists() {
 		out["max_tokens"] = v.Int()
+		explicitMaxTokens = true
 	}
 	if v := root.Get("temperature"); v.Exists() {
 		out["temperature"] = v.Float()
@@ -75,6 +78,20 @@ func convertRequestOpenAIToClaude(body []byte) ([]byte, error) {
 	}
 	if v := root.Get("stream"); v.Exists() {
 		out["stream"] = v.Bool()
+	}
+	thinkingEnabled := false
+	if v := root.Get("thinking"); v.IsObject() {
+		// Vendor extension: clients targeting Claude through the OpenAI format
+		// can pass Anthropic's thinking config verbatim.
+		out["thinking"] = v.Value()
+		thinkingEnabled = v.Get("type").String() != "disabled"
+		// Anthropic requires max_tokens > thinking.budget_tokens; only patch
+		// the value we invented, never one the client chose explicitly.
+		if !explicitMaxTokens {
+			if budget := v.Get("budget_tokens").Int(); budget >= defaultClaudeMaxTokens {
+				out["max_tokens"] = budget + defaultClaudeMaxTokens
+			}
+		}
 	}
 	if v := root.Get("stop"); v.Exists() {
 		if v.Type == gjson.String {
@@ -118,6 +135,19 @@ func convertRequestOpenAIToClaude(body []byte) ([]byte, error) {
 			}})
 		case "assistant":
 			var blocks []any
+			// Replay prior thinking turns only when this request runs with
+			// thinking enabled and the block is signed: Claude rejects thinking
+			// blocks otherwise, and unsigned reasoning (from non-Anthropic
+			// upstreams) can never validate.
+			if thinkingEnabled {
+				if reasoning := msg.Get("reasoning_content").String(); reasoning != "" {
+					if signature := msg.Get("extra_content.anthropic.thinking_signature").String(); signature != "" {
+						blocks = append(blocks, map[string]any{
+							"type": "thinking", "thinking": reasoning, "signature": signature,
+						})
+					}
+				}
+			}
 			if text := contentText(content); text != "" {
 				blocks = append(blocks, map[string]any{"type": "text", "text": text})
 			}
@@ -147,10 +177,16 @@ func convertRequestOpenAIToClaude(body []byte) ([]byte, error) {
 		var claudeTools []map[string]any
 		for _, t := range tools {
 			fn := t.Get("function")
+			schema := fn.Get("parameters").Value()
+			if schema == nil {
+				// OpenAI allows omitting parameters for no-arg functions;
+				// Claude requires an object schema.
+				schema = map[string]any{"type": "object"}
+			}
 			claudeTools = append(claudeTools, map[string]any{
 				"name":         fn.Get("name").String(),
 				"description":  fn.Get("description").String(),
-				"input_schema": fn.Get("parameters").Value(),
+				"input_schema": schema,
 			})
 		}
 		out["tools"] = claudeTools
@@ -637,6 +673,30 @@ func streamOpenAIToClaude(rc *relayContext, resp *http.Response) usage {
 			finishReason = v.String()
 		}
 		delta := choice.Get("delta")
+		if reasoning := delta.Get("reasoning_content").String(); reasoning != "" {
+			if blockType != "thinking" {
+				closeBlock()
+				blockIndex++
+				blockType = "thinking"
+				writeClaudeEvent(rc, "content_block_start", gin.H{
+					"type": "content_block_start", "index": blockIndex,
+					"content_block": gin.H{"type": "thinking", "thinking": ""},
+				})
+			}
+			outputText.WriteString(reasoning)
+			writeClaudeEvent(rc, "content_block_delta", gin.H{
+				"type": "content_block_delta", "index": blockIndex,
+				"delta": gin.H{"type": "thinking_delta", "thinking": reasoning},
+			})
+		}
+		// Signatures may ride along a reasoning delta or arrive in their own
+		// chunk right after the last one; both land while the block is open.
+		if signature := thinkingSignatureFromDelta(delta); signature != "" && blockType == "thinking" {
+			writeClaudeEvent(rc, "content_block_delta", gin.H{
+				"type": "content_block_delta", "index": blockIndex,
+				"delta": gin.H{"type": "signature_delta", "signature": signature},
+			})
+		}
 		if text := delta.Get("content").String(); text != "" {
 			if blockType != "text" {
 				closeBlock()
@@ -690,4 +750,13 @@ func streamOpenAIToClaude(rc *relayContext, resp *http.Response) usage {
 	})
 	writeClaudeEvent(rc, "message_stop", gin.H{"type": "message_stop"})
 	return u
+}
+
+// thinkingSignatureFromDelta pulls a thinking signature from the vendor
+// extension fields our own bridges emit (Anthropic first, then Gemini).
+func thinkingSignatureFromDelta(delta gjson.Result) string {
+	if signature := delta.Get("extra_content.anthropic.thinking_signature").String(); signature != "" {
+		return signature
+	}
+	return delta.Get("extra_content.google.thought_signature").String()
 }
