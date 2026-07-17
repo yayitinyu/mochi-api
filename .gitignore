@@ -3,6 +3,8 @@
 /mochi
 *.db
 *.db-journal
+*.db-wal
+*.db-shm
 
 # frontend
 web/node_modules/

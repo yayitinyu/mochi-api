@@ -12,7 +12,11 @@ var DB *gorm.DB
 
 // InitDB opens the SQLite database and migrates all tables.
 func InitDB() error {
-	db, err := gorm.Open(sqlite.Open(common.SQLitePath()), &gorm.Config{
+	// WAL lets concurrent relay reads proceed while log writes commit, and
+	// synchronous=NORMAL is the recommended (safe) pairing with WAL. The
+	// driver already applies busy_timeout=5000 by default.
+	dsn := common.SQLitePath() + "?_pragma=journal_mode(WAL)&_pragma=synchronous(NORMAL)"
+	db, err := gorm.Open(sqlite.Open(dsn), &gorm.Config{
 		Logger: logger.Default.LogMode(logger.Warn),
 	})
 	if err != nil {
