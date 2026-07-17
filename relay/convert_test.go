@@ -12,6 +12,83 @@ import (
 	"github.com/tidwall/gjson"
 )
 
+func TestSanitizeOpenAIChatMessagesDropsEmptyUserMidToolLoop(t *testing.T) {
+	// Tool-calling agents often inject an empty user turn after tool results.
+	// Moonshot/Kimi reject those with 400001 "role 'user' must not be empty".
+	body := []byte(`{
+		"model":"kimi-k2.6",
+		"messages":[
+			{"role":"system","content":"you are helpful"},
+			{"role":"user","content":"look something up"},
+			{"role":"assistant","content":null,"tool_calls":[
+				{"id":"call_1","type":"function","function":{"name":"lookup","arguments":"{}"}}
+			]},
+			{"role":"tool","tool_call_id":"call_1","content":"found it"},
+			{"role":"user","content":""},
+			{"role":"user","content":[{"type":"text","text":""}]},
+			{"role":"user","content":"  "},
+			{"role":"assistant","content":""},
+			{"role":"assistant","content":"","tool_calls":[
+				{"id":"call_2","type":"function","function":{"name":"lookup","arguments":"{\"q\":2}"}}
+			]},
+			{"role":"tool","tool_call_id":"call_2","content":""}
+		]
+	}`)
+
+	cleaned, err := sanitizeOpenAIChatMessages(body)
+	require.NoError(t, err)
+
+	msgs := gjson.GetBytes(cleaned, "messages").Array()
+	require.Len(t, msgs, 6)
+	require.Equal(t, "system", msgs[0].Get("role").String())
+	require.Equal(t, "user", msgs[1].Get("role").String())
+	require.Equal(t, "look something up", msgs[1].Get("content").String())
+	require.Equal(t, "assistant", msgs[2].Get("role").String())
+	require.True(t, msgs[2].Get("tool_calls").IsArray())
+	require.Equal(t, "tool", msgs[3].Get("role").String())
+	// Empty assistant without tool_calls dropped; assistant with tool_calls kept.
+	require.Equal(t, "assistant", msgs[4].Get("role").String())
+	require.Equal(t, "call_2", msgs[4].Get("tool_calls.0.id").String())
+	require.Equal(t, "tool", msgs[5].Get("role").String())
+
+	// Preserve unrelated fields.
+	require.Equal(t, "kimi-k2.6", gjson.GetBytes(cleaned, "model").String())
+}
+
+func TestSanitizeOpenAIChatMessagesRejectsAllEmpty(t *testing.T) {
+	body := []byte(`{"model":"x","messages":[
+		{"role":"user","content":""},
+		{"role":"assistant","content":null}
+	]}`)
+	_, err := sanitizeOpenAIChatMessages(body)
+	require.Error(t, err)
+}
+
+func TestClaudeToOpenAISkipsEmptyUserTurns(t *testing.T) {
+	body := []byte(`{
+		"model":"claude-x",
+		"max_tokens":100,
+		"messages":[
+			{"role":"user","content":"hi"},
+			{"role":"assistant","content":[{"type":"tool_use","id":"t1","name":"ping","input":{}}]},
+			{"role":"user","content":[
+				{"type":"tool_result","tool_use_id":"t1","content":"pong"},
+				{"type":"text","text":""}
+			]},
+			{"role":"user","content":""}
+		]
+	}`)
+	converted, err := convertRequestClaudeToOpenAI(body)
+	require.NoError(t, err)
+	msgs := gjson.GetBytes(converted, "messages").Array()
+	// user "hi", assistant tool_calls, tool result — empty user text dropped
+	require.Len(t, msgs, 3)
+	require.Equal(t, "user", msgs[0].Get("role").String())
+	require.Equal(t, "assistant", msgs[1].Get("role").String())
+	require.Equal(t, "tool", msgs[2].Get("role").String())
+	require.Equal(t, "pong", msgs[2].Get("content").String())
+}
+
 func TestOpenAIToolWithoutParametersGetsObjectSchema(t *testing.T) {
 	body := []byte(`{
 		"model":"claude-x",

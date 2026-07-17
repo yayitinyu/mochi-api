@@ -238,10 +238,22 @@ func prepareUpstreamBody(rc *relayContext, body []byte) ([]byte, error) {
 		}
 		sourceFormat = FormatOpenAI
 	}
+	// Strip empty user/assistant turns before OpenAI-format fan-out. Strict
+	// providers (Moonshot/Kimi) 400 on empty role content mid tool loop; the
+	// same cleanup keeps Claude/Gemini bridges free of empty blocks.
+	if sourceFormat == FormatOpenAI {
+		body, err = sanitizeOpenAIChatMessages(body)
+		if err != nil {
+			return nil, err
+		}
+	}
 	if rc.upstreamFormat == FormatGemini {
 		// Normalize to OpenAI first, then OpenAI -> Gemini.
 		if sourceFormat == FormatClaude {
 			if body, err = convertRequestClaudeToOpenAI(body); err != nil {
+				return nil, err
+			}
+			if body, err = sanitizeOpenAIChatMessages(body); err != nil {
 				return nil, err
 			}
 		}
@@ -252,6 +264,9 @@ func prepareUpstreamBody(rc *relayContext, body []byte) ([]byte, error) {
 			body, err = convertRequestOpenAIToClaude(body)
 		} else {
 			body, err = convertRequestClaudeToOpenAI(body)
+			if err == nil {
+				body, err = sanitizeOpenAIChatMessages(body)
+			}
 		}
 		if err != nil {
 			return nil, err

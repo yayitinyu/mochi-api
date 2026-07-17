@@ -2,12 +2,14 @@ package relay
 
 import (
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"strings"
 	"time"
 
 	"github.com/gin-gonic/gin"
 	"github.com/tidwall/gjson"
+	"github.com/tidwall/sjson"
 
 	"mochi-api/common"
 )
@@ -52,6 +54,84 @@ func contentText(content gjson.Result) string {
 		sb.WriteString(part.Get("text").String())
 	}
 	return sb.String()
+}
+
+// isEmptyOpenAIContent reports whether a message content value has no
+// user-visible payload. Strict OpenAI-compatible providers (Moonshot/Kimi)
+// reject user messages whose content is null, "", whitespace-only, or an
+// array of empty parts with HTTP 400 "role 'user' must not be empty".
+func isEmptyOpenAIContent(content gjson.Result) bool {
+	if !content.Exists() || content.Type == gjson.Null {
+		return true
+	}
+	if content.Type == gjson.String {
+		return strings.TrimSpace(content.String()) == ""
+	}
+	if !content.IsArray() {
+		// Unexpected object/number content: treat as non-empty so we do not
+		// silently drop messages we cannot interpret.
+		return false
+	}
+	for _, part := range content.Array() {
+		if strings.TrimSpace(part.Get("text").String()) != "" {
+			return false
+		}
+		// image_url may be a string URL or an object {url: "..."}.
+		if img := part.Get("image_url"); img.Exists() {
+			if img.Type == gjson.String && img.String() != "" {
+				return false
+			}
+			if img.Get("url").String() != "" {
+				return false
+			}
+		}
+		if part.Get("url").String() != "" {
+			return false
+		}
+	}
+	return true
+}
+
+// sanitizeOpenAIChatMessages drops empty user/assistant/system turns that
+// tool-calling agents often inject mid-loop. Assistant turns that only carry
+// tool_calls (content null/"") are kept; tool turns are kept even when their
+// content is empty. Returns an error when nothing usable remains.
+func sanitizeOpenAIChatMessages(body []byte) ([]byte, error) {
+	msgs := gjson.GetBytes(body, "messages")
+	if !msgs.IsArray() {
+		return body, nil
+	}
+	out := make([]any, 0, len(msgs.Array()))
+	for _, msg := range msgs.Array() {
+		role := msg.Get("role").String()
+		empty := isEmptyOpenAIContent(msg.Get("content"))
+		hasToolCalls := len(msg.Get("tool_calls").Array()) > 0
+		hasReasoning := strings.TrimSpace(msg.Get("reasoning_content").String()) != ""
+
+		switch role {
+		case "user", "system", "developer":
+			if empty {
+				continue
+			}
+		case "assistant":
+			// Empty assistant text is valid when the model is only calling tools
+			// or replaying reasoning; pure empty turns are dropped.
+			if empty && !hasToolCalls && !hasReasoning {
+				continue
+			}
+		case "tool":
+			// Keep tool results; some clients send empty strings on success.
+		default:
+			// Unknown roles pass through unchanged.
+		}
+		if v := msg.Value(); v != nil {
+			out = append(out, v)
+		}
+	}
+	if len(out) == 0 {
+		return nil, fmt.Errorf("messages 中没有非空内容")
+	}
+	return sjson.SetBytes(body, "messages", out)
 }
 
 // --- request conversion: OpenAI -> Claude ---
@@ -324,7 +404,10 @@ func convertRequestClaudeToOpenAI(body []byte) ([]byte, error) {
 		}
 		// user message: split tool_result blocks into OpenAI "tool" messages
 		if content.Type == gjson.String {
-			messages = append(messages, map[string]any{"role": "user", "content": content.String()})
+			// Skip empty user turns — Moonshot/Kimi reject them with 400001.
+			if text := content.String(); strings.TrimSpace(text) != "" {
+				messages = append(messages, map[string]any{"role": "user", "content": text})
+			}
 			continue
 		}
 		var parts []any
@@ -337,7 +420,9 @@ func convertRequestClaudeToOpenAI(body []byte) ([]byte, error) {
 		for _, block := range content.Array() {
 			switch block.Get("type").String() {
 			case "text":
-				parts = append(parts, map[string]any{"type": "text", "text": block.Get("text").String()})
+				if text := block.Get("text").String(); strings.TrimSpace(text) != "" {
+					parts = append(parts, map[string]any{"type": "text", "text": text})
+				}
 			case "image":
 				if url := claudeSourceToImageURL(block.Get("source")); url != "" {
 					parts = append(parts, map[string]any{

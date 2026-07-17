@@ -27,6 +27,27 @@ func openAIStreamToolCallID(body string) string {
 	return ""
 }
 
+func TestResponsesToChatDropsEmptyUserTurns(t *testing.T) {
+	body := []byte(`{
+		"model":"kimi-k2.6",
+		"input":[
+			{"type":"message","role":"user","content":[{"type":"input_text","text":"search"}]},
+			{"type":"function_call","call_id":"c1","name":"lookup","arguments":"{}"},
+			{"type":"function_call_output","call_id":"c1","output":"done"},
+			{"type":"message","role":"user","content":[{"type":"input_text","text":""}]},
+			{"type":"message","role":"user","content":[]}
+		]
+	}`)
+	converted, err := convertRequestResponsesToOpenAIChat(body)
+	require.NoError(t, err)
+	msgs := gjson.GetBytes(converted, "messages").Array()
+	require.Len(t, msgs, 3)
+	require.Equal(t, "user", msgs[0].Get("role").String())
+	require.Equal(t, "search", msgs[0].Get("content.0.text").String())
+	require.Equal(t, "assistant", msgs[1].Get("role").String())
+	require.Equal(t, "tool", msgs[2].Get("role").String())
+}
+
 func TestResponsesRequestConvertsReasoningAndWebSearchForGemini(t *testing.T) {
 	responsesBody := []byte(`{
 		"model":"gemini-3-flash-preview",

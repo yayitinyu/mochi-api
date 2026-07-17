@@ -97,8 +97,14 @@ func convertRequestResponsesToOpenAIChat(body []byte) ([]byte, error) {
 				if role == "" {
 					role = "user"
 				}
+				content := responseContentToOpenAI(item.Get("content"))
+				// Drop empty user/system turns produced by empty part arrays;
+				// strict providers (Moonshot/Kimi) reject them mid tool loop.
+				if isEmptyOpenAIContentValue(content) && role != "assistant" {
+					continue
+				}
 				messages = append(messages, map[string]any{
-					"role": role, "content": responseContentToOpenAI(item.Get("content")),
+					"role": role, "content": content,
 				})
 			}
 		}
@@ -166,7 +172,48 @@ func responseContentToOpenAI(content gjson.Result) any {
 			}
 		}
 	}
+	// Prefer a string over an empty part array so emptiness is unambiguous.
+	if len(parts) == 0 {
+		return ""
+	}
 	return parts
+}
+
+// isEmptyOpenAIContentValue mirrors isEmptyOpenAIContent for already-decoded
+// content values produced by responseContentToOpenAI.
+func isEmptyOpenAIContentValue(content any) bool {
+	switch v := content.(type) {
+	case nil:
+		return true
+	case string:
+		return strings.TrimSpace(v) == ""
+	case []any:
+		if len(v) == 0 {
+			return true
+		}
+		for _, part := range v {
+			m, ok := part.(map[string]any)
+			if !ok {
+				return false
+			}
+			if text, ok := m["text"].(string); ok && strings.TrimSpace(text) != "" {
+				return false
+			}
+			switch img := m["image_url"].(type) {
+			case string:
+				if img != "" {
+					return false
+				}
+			case map[string]any:
+				if url, _ := img["url"].(string); url != "" {
+					return false
+				}
+			}
+		}
+		return true
+	default:
+		return false
+	}
 }
 
 func responseOutputText(output gjson.Result) string {
