@@ -1,6 +1,8 @@
 package router
 
 import (
+	"time"
+
 	"github.com/gin-gonic/gin"
 
 	"mochi-api/controller"
@@ -34,8 +36,20 @@ func relayCORS() gin.HandlerFunc {
 	return func(c *gin.Context) {
 		c.Header("Access-Control-Allow-Origin", "*")
 		c.Header("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
-		c.Header("Access-Control-Allow-Headers", "Authorization, Content-Type, Accept, x-api-key, anthropic-version, OpenAI-Beta")
+		// Echo whatever headers the browser announced: relay auth is
+		// token-based (no cookies), so reflecting request headers is safe and
+		// keeps up with SDKs that add vendor headers (anthropic-beta,
+		// x-stainless-*, ...) faster than a static list could.
+		allowHeaders := c.GetHeader("Access-Control-Request-Headers")
+		if allowHeaders == "" {
+			allowHeaders = "Authorization, Content-Type, Accept, x-api-key, anthropic-version, anthropic-beta, OpenAI-Beta"
+		}
+		c.Header("Access-Control-Allow-Headers", allowHeaders)
+		// The allowed-headers value echoes a request header, so caches must key
+		// on it to avoid serving one client's preflight answer to another.
+		c.Header("Vary", "Access-Control-Request-Headers")
 		c.Header("Access-Control-Expose-Headers", "Content-Type, X-Request-Id")
+		c.Header("Access-Control-Max-Age", "86400")
 		c.Next()
 	}
 }
@@ -43,13 +57,17 @@ func relayCORS() gin.HandlerFunc {
 // SetApiRouter wires up the dashboard API under /api.
 func SetApiRouter(r *gin.Engine) {
 	api := r.Group("/api")
+	api.Use(middleware.BodyLimit(1 << 20))
 
 	api.GET("/status", controller.PublicStatus)
 
+	// Session auth relies on bcrypt being slow; the limiter stops an
+	// attacker from simply parallelizing guesses.
+	authLimit := middleware.RateLimit(15, time.Minute)
 	auth := api.Group("/auth")
 	{
-		auth.POST("/register", controller.Register)
-		auth.POST("/login", controller.Login)
+		auth.POST("/register", authLimit, controller.Register)
+		auth.POST("/login", authLimit, controller.Login)
 		auth.POST("/logout", controller.Logout)
 		auth.GET("/me", middleware.UserAuth(), controller.Me)
 	}

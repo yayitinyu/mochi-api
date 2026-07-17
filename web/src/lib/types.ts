@@ -43,7 +43,8 @@ export interface Channel {
   name: string;
   type: string;
   base_url: string;
-  api_key: string;
+  /** Masked key preview; the raw key never leaves the server. */
+  api_key_preview?: string;
   models: string;
   responses_mode: ResponsesMode;
   icon: string;

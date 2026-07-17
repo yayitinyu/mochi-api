@@ -58,8 +58,11 @@ docker run -d -p 3000:3000 -e TZ=Asia/Shanghai -v ./data:/data mochi-api
 | --- | --- | --- |
 | `PORT` | `3000` | HTTP 监听端口 |
 | `MOCHI_DATA` | `.` | SQLite 数据库文件所在目录 |
+| `TRUSTED_PROXIES` | （空） | 逗号分隔的反向代理 IP/CIDR 列表，用于信任 `X-Forwarded-For`。留空则不信任任何代理头，`ClientIP` 取直连地址。部署在 Nginx/Caddy 之后时应设为代理地址，否则限流按代理 IP 聚合。 |
 
 > 每日统计按**服务器本地时区**在写入时冻结。若用 Docker 部署，请设置 `TZ` 环境变量以对齐热力图的日期边界。
+>
+> 上游请求遵循标准的 `HTTP_PROXY` / `HTTPS_PROXY` / `NO_PROXY` 环境变量，需要经代理访问上游 API 时直接设置即可。
 
 ## 开发
 

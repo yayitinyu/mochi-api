@@ -19,8 +19,11 @@ type Channel struct {
 	Name    string `json:"name"`
 	Type    string `gorm:"size:32" json:"type"` // "openai" | "anthropic"
 	BaseURL string `json:"base_url"`            // e.g. https://api.openai.com; a trailing "/" marks a full API prefix, a trailing "#" marks an exact endpoint URL
-	ApiKey  string `json:"api_key"`
-	Models  string `json:"models"` // comma-joined model names
+	// ApiKey is never serialized; dashboard responses carry ApiKeyPreview
+	// instead so the raw upstream credential stays server-side.
+	ApiKey        string `json:"-"`
+	ApiKeyPreview string `gorm:"-" json:"api_key_preview,omitempty"`
+	Models        string `json:"models"` // comma-joined model names
 	// ResponsesMode controls how OpenAI-compatible channels serve downstream
 	// Responses requests. Chat conversion is the safe default; native mode is
 	// opt-in for upstreams with a complete /v1/responses implementation.
@@ -31,6 +34,18 @@ type Channel struct {
 	Priority  int    `json:"priority"`
 	Status    int    `json:"status"`
 	CreatedAt int64  `json:"created_at"`
+}
+
+// KeyPreview returns a masked form exposing only the first and last four
+// characters (e.g. "sk-a****cdef"), mirroring Token.KeyPreview for list views.
+func (ch *Channel) KeyPreview() string {
+	if ch.ApiKey == "" {
+		return ""
+	}
+	if len(ch.ApiKey) < 8 {
+		return "****"
+	}
+	return ch.ApiKey[:4] + "****" + ch.ApiKey[len(ch.ApiKey)-4:]
 }
 
 // ModelList splits the comma-joined Models field into trimmed names.
@@ -96,12 +111,6 @@ func GetEnabledChannelsForModelList(models []string) ([]Channel, error) {
 		}
 	}
 	return matched, nil
-}
-
-// GetEnabledChannelsForModel returns enabled channels serving the model,
-// ordered by priority descending.
-func GetEnabledChannelsForModel(model string) ([]Channel, error) {
-	return GetEnabledChannelsForModelList([]string{model})
 }
 
 // GetEnabledModels returns the deduplicated union of models across enabled channels.

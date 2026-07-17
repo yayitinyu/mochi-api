@@ -1,6 +1,7 @@
 package model
 
 import (
+	"encoding/json"
 	"testing"
 
 	"github.com/stretchr/testify/require"
@@ -66,4 +67,25 @@ func TestChannelResponsesModeBackfillOnMigrate(t *testing.T) {
 	stored, err := GetChannelById(channel.Id)
 	require.NoError(t, err)
 	require.Equal(t, ChannelResponsesModeChat, stored.ResponsesMode)
+}
+
+// The raw upstream credential must never leave the server: JSON responses
+// carry only the masked preview.
+func TestChannelJSONNeverContainsApiKey(t *testing.T) {
+	channel := Channel{
+		Name: "secret-holder", Type: ChannelTypeOpenAI, BaseURL: "https://example.com",
+		ApiKey: "sk-live-supersecret-value", Models: "model-a", Status: StatusEnabled,
+	}
+	channel.ApiKeyPreview = channel.KeyPreview()
+
+	data, err := json.Marshal(channel)
+	require.NoError(t, err)
+	require.NotContains(t, string(data), "sk-live-supersecret-value")
+	require.NotContains(t, string(data), `"api_key"`)
+	require.Contains(t, string(data), `"api_key_preview":"sk-l****alue"`)
+
+	empty := Channel{}
+	require.Equal(t, "", empty.KeyPreview())
+	short := Channel{ApiKey: "abc"}
+	require.Equal(t, "****", short.KeyPreview())
 }

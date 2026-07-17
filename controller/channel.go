@@ -77,6 +77,9 @@ func ListChannels(c *gin.Context) {
 		respondError(c, http.StatusInternalServerError, "数据库错误")
 		return
 	}
+	for i := range channels {
+		channels[i].ApiKeyPreview = channels[i].KeyPreview()
+	}
 	respondData(c, channels)
 }
 
@@ -100,6 +103,7 @@ func CreateChannel(c *gin.Context) {
 		respondError(c, http.StatusInternalServerError, "创建失败")
 		return
 	}
+	channel.ApiKeyPreview = channel.KeyPreview()
 	respondData(c, channel)
 }
 
@@ -131,6 +135,7 @@ func UpdateChannel(c *gin.Context) {
 		respondError(c, http.StatusInternalServerError, "更新失败")
 		return
 	}
+	channel.ApiKeyPreview = channel.KeyPreview()
 	respondData(c, channel)
 }
 
