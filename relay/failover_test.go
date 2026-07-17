@@ -1,10 +1,13 @@
 package relay
 
 import (
+	"context"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/gin-gonic/gin"
 	"github.com/stretchr/testify/require"
@@ -144,4 +147,114 @@ func TestHandleFullPrefixBaseURL(t *testing.T) {
 	require.Equal(t, http.StatusOK, recorder.Code, recorder.Body.String())
 	require.Equal(t, "/api/v4/chat/completions", gotPath,
 		"trailing-slash base URL must skip the /v1 version segment")
+}
+
+// A client that gives up mid-request must not poison channel health: the
+// canceled context fails every channel identically, so failing over (and
+// cooling each one down) would take the whole fleet offline for 60s.
+func TestHandleClientCancelDoesNotCoolChannels(t *testing.T) {
+	setupRelayDB(t)
+
+	release := make(chan struct{})
+	var hits int
+	slow := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		hits++
+		<-release
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer slow.Close()
+	defer close(release)
+
+	chA := &model.Channel{Name: "a", Type: model.ChannelTypeOpenAI, BaseURL: slow.URL,
+		Models: "test-model", Priority: 10, Status: model.StatusEnabled}
+	chB := &model.Channel{Name: "b", Type: model.ChannelTypeOpenAI, BaseURL: slow.URL,
+		Models: "test-model", Priority: 0, Status: model.StatusEnabled}
+	require.NoError(t, model.CreateChannel(chA))
+	require.NoError(t, model.CreateChannel(chB))
+	t.Cleanup(func() {
+		markChannelSuccess(chA.Id)
+		markChannelSuccess(chB.Id)
+	})
+
+	gin.SetMode(gin.TestMode)
+	recorder := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(recorder)
+	ctx, cancel := context.WithCancel(context.Background())
+	c.Request = httptest.NewRequest(http.MethodPost, "/v1/chat/completions",
+		strings.NewReader(`{"model":"test-model","messages":[{"role":"user","content":"hi"}]}`)).
+		WithContext(ctx)
+	c.Request.Header.Set("Content-Type", "application/json")
+
+	go func() {
+		time.Sleep(100 * time.Millisecond)
+		cancel()
+	}()
+	Handle(c, FormatOpenAI)
+
+	require.Equal(t, 1, hits, "a canceled request must not fail over to further channels")
+	require.False(t, channelCoolingDown(chA.Id), "client cancellation is not a channel failure")
+	require.False(t, channelCoolingDown(chB.Id))
+
+	logs, total, err := model.GetLogs(model.LogQuery{})
+	require.NoError(t, err)
+	require.EqualValues(t, 1, total)
+	require.Equal(t, statusClientClosedRequest, logs[0].Code)
+}
+
+// When a native-Responses channel rejects the Responses method and mochi falls
+// back to Chat Completions, the retried request must carry the alias-resolved
+// upstream model name, not the alias the client used.
+func TestResponsesFallbackKeepsResolvedModel(t *testing.T) {
+	setupRelayDB(t)
+
+	var chatModel string
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/v1/responses" {
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusBadRequest)
+			_, _ = w.Write([]byte(`{"error":{"message":"Model does not support responses method.","type":"invalid_request_error"}}`))
+			return
+		}
+		body, _ := io.ReadAll(r.Body)
+		chatModel = gjson.GetBytes(body, "model").String()
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{
+			"id":"chatcmpl-1","created":1700000000,"model":"upstream-model",
+			"choices":[{"message":{"role":"assistant","content":"ok"},"finish_reason":"stop"}],
+			"usage":{"prompt_tokens":1,"completion_tokens":1,"total_tokens":2}
+		}`))
+	}))
+	defer upstream.Close()
+
+	channel := &model.Channel{
+		Name: "native", Type: model.ChannelTypeOpenAI, BaseURL: upstream.URL,
+		Models: "upstream-model", ResponsesMode: model.ChannelResponsesModeNative,
+		Status: model.StatusEnabled,
+	}
+	require.NoError(t, model.CreateChannel(channel))
+	require.NoError(t, model.CreateModelMapping(&model.ModelMapping{
+		Alias: "friendly-name", UpstreamName: "upstream-model",
+	}))
+	t.Cleanup(func() { markChannelSuccess(channel.Id) })
+
+	gin.SetMode(gin.TestMode)
+	recorder := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(recorder)
+	c.Request = httptest.NewRequest(http.MethodPost, "/v1/responses",
+		strings.NewReader(`{"model":"friendly-name","input":"hello"}`))
+	c.Request.Header.Set("Content-Type", "application/json")
+	Handle(c, FormatResponses)
+
+	require.Equal(t, http.StatusOK, recorder.Code, recorder.Body.String())
+	require.Equal(t, "upstream-model", chatModel)
+}
+
+func TestHandleRejectsOversizedBody(t *testing.T) {
+	setupRelayDB(t)
+
+	huge := `{"model":"test-model","messages":[{"role":"user","content":"` +
+		strings.Repeat("x", maxRequestBody) + `"}]}`
+	recorder := relayRequest(t, huge)
+
+	require.Equal(t, http.StatusRequestEntityTooLarge, recorder.Code)
 }

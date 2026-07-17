@@ -3,6 +3,7 @@ package relay
 import (
 	"bufio"
 	"bytes"
+	"errors"
 	"fmt"
 	"io"
 	"math/rand/v2"
@@ -31,11 +32,23 @@ const (
 
 const defaultAnthropicVersion = "2023-06-01"
 
+// maxRequestBody bounds how much of a relay request body we buffer in memory.
+// The body is fully read so it can be replayed across failover channels, so an
+// unbounded read would let a single client exhaust server memory. 32 MiB is
+// generous enough for large multi-image chat payloads.
+const maxRequestBody = 32 << 20
+
 // httpClient has no total timeout so long SSE streams are never killed;
-// only connection setup and header wait are bounded.
+// only connection setup and header wait are bounded. Proxy settings are
+// honored from the environment, and HTTP/2 is negotiated when available.
 var httpClient = &http.Client{
 	Transport: &http.Transport{
+		Proxy:                 http.ProxyFromEnvironment,
 		DialContext:           (&net.Dialer{Timeout: 15 * time.Second}).DialContext,
+		ForceAttemptHTTP2:     true,
+		MaxIdleConns:          100,
+		MaxIdleConnsPerHost:   16,
+		IdleConnTimeout:       90 * time.Second,
 		TLSHandshakeTimeout:   15 * time.Second,
 		ResponseHeaderTimeout: 10 * time.Minute,
 	},
@@ -55,18 +68,32 @@ type relayContext struct {
 	modelName        string
 	upstreamModel    string // resolved upstream name (equals modelName when no alias)
 	stream           bool
-	clientWantsUsage bool   // OpenAI client explicitly set stream_options.include_usage
-	promptText       string // rough concatenation of input text, for fallback estimation
+	clientWantsUsage bool // OpenAI client explicitly set stream_options.include_usage
 	start            time.Time
 }
+
+// statusClientClosedRequest mirrors nginx's 499: the client went away before
+// the upstream answered. Logged for observability; never sent on the wire.
+const statusClientClosedRequest = 499
 
 // Handle is the shared relay pipeline for OpenAI Chat Completions, OpenAI
 // Responses, and Anthropic Messages compatible endpoints.
 func Handle(c *gin.Context, clientFormat Format) {
 	rc := &relayContext{c: c, clientFormat: clientFormat, start: time.Now()}
 
+	c.Request.Body = http.MaxBytesReader(c.Writer, c.Request.Body, maxRequestBody)
 	body, err := io.ReadAll(c.Request.Body)
-	if err != nil || len(body) == 0 {
+	if err != nil {
+		var tooLarge *http.MaxBytesError
+		if errors.As(err, &tooLarge) {
+			writeError(c, clientFormat, http.StatusRequestEntityTooLarge,
+				"invalid_request_error", "请求体过大")
+			return
+		}
+		writeError(c, clientFormat, http.StatusBadRequest, "invalid_request_error", "无法读取请求体")
+		return
+	}
+	if len(body) == 0 {
 		writeError(c, clientFormat, http.StatusBadRequest, "invalid_request_error", "无法读取请求体")
 		return
 	}
@@ -84,7 +111,6 @@ func Handle(c *gin.Context, clientFormat Format) {
 	rc.stream = gjson.GetBytes(body, "stream").Bool()
 	rc.clientWantsUsage = clientFormat == FormatOpenAI &&
 		gjson.GetBytes(body, "stream_options.include_usage").Bool()
-	rc.promptText = collectPromptText(body)
 
 	channels, err := model.GetEnabledChannelsForModelList(targetModels)
 	if err != nil {
@@ -131,8 +157,15 @@ func Handle(c *gin.Context, clientFormat Format) {
 			continue
 		}
 
-		resp, err = sendUpstreamWithResponsesFallback(rc, body, upstreamBody)
+		resp, err = sendUpstreamWithResponsesFallback(rc, channelBody, upstreamBody)
 		if err != nil {
+			// A canceled/abandoned client request fails every channel the same
+			// way; it says nothing about channel health, and there is no one
+			// left to answer, so stop instead of failing over.
+			if c.Request.Context().Err() != nil {
+				recordRelayLog(rc, usage{}, statusClientClosedRequest)
+				return
+			}
 			lastErr = fmt.Errorf("上游请求失败: %w", err)
 			markChannelFailure(rc.channel.Id)
 			recordRelayLog(rc, usage{}, http.StatusBadGateway)
@@ -143,6 +176,7 @@ func Handle(c *gin.Context, clientFormat Format) {
 			continue
 		}
 		if resp.StatusCode != http.StatusOK && !last && retriableStatus(resp.StatusCode) {
+			lastErr = fmt.Errorf("上游返回 %d", resp.StatusCode)
 			markChannelFailure(rc.channel.Id)
 			recordRelayLog(rc, usage{}, resp.StatusCode)
 			_ = resp.Body.Close()
@@ -153,6 +187,9 @@ func Handle(c *gin.Context, clientFormat Format) {
 	}
 	if resp == nil {
 		// Every candidate failed with a network error or was skipped.
+		if lastErr == nil {
+			lastErr = errors.New("没有可用渠道")
+		}
 		writeError(c, clientFormat, http.StatusBadGateway, "api_error", lastErr.Error())
 		return
 	}
@@ -175,7 +212,9 @@ func Handle(c *gin.Context, clientFormat Format) {
 		u = dispatchNonStream(rc, resp)
 	}
 	if u.prompt == 0 {
-		u.prompt = estimateTokens(rc.promptText)
+		// Estimation is deferred to here so the common path (upstream reported
+		// usage) never pays for concatenating the whole prompt.
+		u.prompt = estimateTokens(collectPromptText(body))
 		u.estimated = true
 	}
 	recordRelayLog(rc, u, http.StatusOK)
@@ -243,16 +282,23 @@ func sendUpstream(rc *relayContext, body []byte) (*http.Response, error) {
 			version = defaultAnthropicVersion
 		}
 		req.Header.Set("anthropic-version", version)
+		// Beta opt-ins (prompt caching, extended output, ...) only make sense
+		// for Anthropic-format upstreams; other formats never receive them.
+		if beta := rc.c.Request.Header.Get("anthropic-beta"); beta != "" {
+			req.Header.Set("anthropic-beta", beta)
+		}
 	}
 	return httpClient.Do(req)
 }
 
 // sendUpstreamWithResponsesFallback retries a portable Responses request via
 // Chat Completions only when an OpenAI-compatible upstream explicitly reports
-// that its Responses method is unsupported.
+// that its Responses method is unsupported. requestBody is the Responses-format
+// body with the channel's model name already resolved, so the fallback
+// conversion targets the same upstream model.
 func sendUpstreamWithResponsesFallback(
 	rc *relayContext,
-	clientBody, upstreamBody []byte,
+	requestBody, upstreamBody []byte,
 ) (*http.Response, error) {
 	resp, err := sendUpstream(rc, upstreamBody)
 	if err != nil || resp.StatusCode == http.StatusOK ||
@@ -262,7 +308,7 @@ func sendUpstreamWithResponsesFallback(
 	}
 
 	originalBody := resp.Body
-	errorBody, readErr := io.ReadAll(originalBody)
+	errorBody, readErr := io.ReadAll(io.LimitReader(originalBody, maxErrorBody))
 	_ = originalBody.Close()
 	resp.Body = io.NopCloser(bytes.NewReader(errorBody))
 	if readErr != nil {
@@ -273,7 +319,7 @@ func sendUpstreamWithResponsesFallback(
 	}
 
 	rc.upstreamFormat = FormatOpenAI
-	fallbackBody, prepareErr := prepareUpstreamBody(rc, clientBody)
+	fallbackBody, prepareErr := prepareUpstreamBody(rc, requestBody)
 	if prepareErr != nil {
 		rc.upstreamFormat = FormatResponses
 		return resp, nil
@@ -399,7 +445,7 @@ func dispatchStream(rc *relayContext, resp *http.Response) usage {
 }
 
 func dispatchNonStream(rc *relayContext, resp *http.Response) usage {
-	body, err := io.ReadAll(resp.Body)
+	body, err := readBounded(resp.Body, maxUpstreamBody)
 	if err != nil {
 		writeError(rc.c, rc.clientFormat, http.StatusBadGateway, "api_error", "读取上游响应失败")
 		return usage{}
@@ -494,7 +540,7 @@ func extractUsage(body []byte, format Format) usage {
 // relayUpstreamError forwards a non-200 upstream response. Cross-format
 // error bodies are rewrapped so the client always sees its own dialect.
 func relayUpstreamError(rc *relayContext, resp *http.Response) {
-	body, _ := io.ReadAll(resp.Body)
+	body, _ := io.ReadAll(io.LimitReader(resp.Body, maxErrorBody))
 	recordRelayLog(rc, usage{}, resp.StatusCode)
 	if rc.clientFormat == rc.upstreamFormat {
 		contentType := resp.Header.Get("Content-Type")
@@ -508,10 +554,30 @@ func relayUpstreamError(rc *relayContext, resp *http.Response) {
 	if message == "" {
 		message = strings.TrimSpace(string(body))
 	}
-	if len(message) > 500 {
-		message = message[:500]
+	if runes := []rune(message); len(runes) > 500 {
+		message = string(runes[:500])
 	}
 	writeError(rc.c, rc.clientFormat, resp.StatusCode, "api_error", message)
+}
+
+// maxErrorBody caps buffered upstream error bodies; maxUpstreamBody caps
+// buffered non-stream success bodies. Streams are never buffered.
+const (
+	maxErrorBody    = 1 << 20
+	maxUpstreamBody = 64 << 20
+)
+
+// readBounded reads r fully, erroring out when the payload exceeds limit
+// instead of silently truncating it into malformed JSON.
+func readBounded(r io.Reader, limit int64) ([]byte, error) {
+	data, err := io.ReadAll(io.LimitReader(r, limit+1))
+	if err != nil {
+		return nil, err
+	}
+	if int64(len(data)) > limit {
+		return nil, fmt.Errorf("响应超过 %d 字节上限", limit)
+	}
+	return data, nil
 }
 
 // upstreamFormatFor maps a channel and client protocol to the wire format sent
