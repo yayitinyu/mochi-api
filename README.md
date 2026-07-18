@@ -4,9 +4,10 @@
 
 ## 功能
 
-- **API 聚合转发**：OpenAI Chat Completions（`/v1/chat/completions`）、OpenAI Responses（`/v1/responses`）与 Claude 原生格式（`/v1/messages`），均支持 SSE 流式
+- **API 聚合转发**：OpenAI Chat Completions（`/v1/chat/completions`）、OpenAI Responses（`/v1/responses`）、OpenAI Images（`/v1/images/generations`）与 Claude 原生格式（`/v1/messages`），均支持 SSE 流式
 - **跨格式互转**：OpenAI Chat/Responses、Claude、Gemini 三种上游互调；OpenAI 兼容渠道默认将 Responses 安全转换到 Chat Completions，也可为完整兼容的上游显式开启原生 Responses
 - **推理与工具**：保留 `reasoning`、函数工具和 Responses 内置工具参数；Gemini 渠道支持 thought summary / signature 转换，并将 `web_search` 映射为 Google Search grounding
+- **图片生成**：GPT Image、Seedream、Grok Image 等 OpenAI Images 兼容上游直接转发；Nano Banana 等 Gemini 图片模型自动转换请求、Base64/data URL 响应与 SSE 完成事件
 - **账号系统**：注册 / 登录（cookie 会话 + bcrypt），首位注册用户自动成为管理员
 - **API 密钥管理**：创建、启停、删除，密钥完整值仅创建时展示一次
 - **渠道管理**：官方渠道模板一键预填、连通性测试、一键从上游拉取新模型、可选择清理现有模型
@@ -83,11 +84,26 @@ cd web && npm run dev
 - **官方渠道**：下拉选择 OpenAI / Anthropic / Gemini / DeepSeek / Kimi / Grok / 通义 / 智谱 / SiliconFlow / OpenRouter，自动填好类型和 Base URL，只需再粘贴 Key
 - **类型**：OpenAI 兼容、Anthropic 兼容 或 Google Gemini
 - **Base URL**：如 `https://api.openai.com`（不含 `/v1` 路径）；Gemini 用 `https://generativelanguage.googleapis.com`
-- **模型**：逗号分隔的模型名列表，或点「获取模型」从上游自动拉取
+- **模型**：逗号分隔的模型名列表，或点「获取模型」从上游自动拉取；聊天与图片模型可以配置在同一渠道
 - **Responses 兼容模式**：OpenAI 兼容渠道默认使用「Chat 转换」；确认上游完整支持 `/v1/responses` 及其流式事件后，才选择「原生 Responses」
 - **优先级**：数值越大越优先，同级随机
 
 之后用创建的 `sk-` 密钥即可调用，`Authorization: Bearer sk-xxx` 与 `x-api-key: sk-xxx` 两种方式都支持。Gemini 渠道会自动在 OpenAI / Claude 格式与 Gemini 原生格式之间转换。
+
+### 图片生成示例
+
+```bash
+curl http://localhost:3000/v1/images/generations \
+  -H "Authorization: Bearer sk-xxx" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "model": "gpt-image-2",
+    "prompt": "一只坐在樱花树下的软萌麻薯精灵",
+    "size": "1024x1024"
+  }'
+```
+
+同一端点可路由到 GPT Image、Grok Imagine、Seedream 与 Nano Banana。OpenAI 兼容渠道会收到原始 Images 请求；Gemini 渠道会改用 `generateContent` 并默认返回 `data[].b64_json`。若显式传入 `"response_format":"url"`，Gemini 响应使用可直接展示的 data URL。Gemini 当前只保证单图生成（`n` 省略或为 `1`）；开启 `stream` 时返回 OpenAI Images 风格的 `image_generation.completed` SSE 事件，但不合成上游没有提供的局部预览图。
 
 ### Responses API 示例
 

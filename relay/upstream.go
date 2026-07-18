@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"strings"
 	"time"
 
@@ -97,13 +98,64 @@ func ListUpstreamModels(chType, baseURL, apiKey string) ([]string, time.Duration
 			models = append(models, id)
 		}
 	}
+	// xAI exposes richer image-model discovery on a dedicated endpoint that
+	// may include models omitted from the generic /v1/models response.
+	if imageModelsURL := xAIImageModelsURL(base); imageModelsURL != "" {
+		if imageModels := fetchXAIImageModels(client, imageModelsURL, apiKey); len(imageModels) > 0 {
+			seen := make(map[string]bool, len(models)+len(imageModels))
+			for _, name := range models {
+				seen[name] = true
+			}
+			for _, name := range imageModels {
+				if !seen[name] {
+					models = append(models, name)
+					seen[name] = true
+				}
+			}
+		}
+	}
 	return models, latency, nil
+}
+
+func xAIImageModelsURL(base string) string {
+	parsed, err := url.Parse(base)
+	if err != nil || !strings.EqualFold(parsed.Hostname(), "api.x.ai") {
+		return ""
+	}
+	return parsed.Scheme + "://" + parsed.Host + "/v1/image-generation-models"
+}
+
+func fetchXAIImageModels(client *http.Client, endpoint, apiKey string) []string {
+	req, err := http.NewRequest(http.MethodGet, endpoint, nil)
+	if err != nil {
+		return nil
+	}
+	req.Header.Set("Authorization", "Bearer "+apiKey)
+	resp, err := client.Do(req)
+	if err != nil {
+		return nil
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return nil
+	}
+	body, err := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
+	if err != nil {
+		return nil
+	}
+	var models []string
+	for _, item := range gjson.GetBytes(body, "models").Array() {
+		if id := item.Get("id").String(); id != "" {
+			models = append(models, id)
+		}
+	}
+	return models
 }
 
 // modelsURLFromExact guesses the model-list URL for an exact-endpoint ("#")
 // base by stripping the known chat endpoint leaf and appending "models".
 func modelsURLFromExact(exactURL string) string {
-	for _, leaf := range []string{"/chat/completions", "/messages", "/responses"} {
+	for _, leaf := range []string{"/chat/completions", "/messages", "/responses", "/images/generations"} {
 		if prefix, ok := strings.CutSuffix(exactURL, leaf); ok {
 			return prefix + "/models"
 		}

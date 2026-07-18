@@ -27,10 +27,10 @@ export const PRESET_CATEGORY_LABELS: Record<PresetCategory, string> = {
 
 export const CHANNEL_PRESETS: ChannelPreset[] = [
   // --- 国际官方 ---
-  { id: 'openai', label: 'OpenAI', type: 'openai', baseUrl: 'https://api.openai.com', category: 'global', icon: 'openai' },
+  { id: 'openai', label: 'OpenAI', type: 'openai', baseUrl: 'https://api.openai.com', category: 'global', icon: 'openai', hint: '支持 GPT Image 的 /v1/images/generations' },
   { id: 'anthropic', label: 'Anthropic', type: 'anthropic', baseUrl: 'https://api.anthropic.com', category: 'global', icon: 'anthropic' },
-  { id: 'gemini', label: 'Google Gemini', type: 'gemini', baseUrl: 'https://generativelanguage.googleapis.com', category: 'global', icon: 'gemini' },
-  { id: 'xai', label: 'xAI (Grok)', type: 'openai', baseUrl: 'https://api.x.ai', category: 'global', icon: 'grok' },
+  { id: 'gemini', label: 'Google Gemini', type: 'gemini', baseUrl: 'https://generativelanguage.googleapis.com', category: 'global', icon: 'gemini', hint: '支持 Nano Banana 图片模型，自动转换 Images 请求' },
+  { id: 'xai', label: 'xAI (Grok)', type: 'openai', baseUrl: 'https://api.x.ai', category: 'global', icon: 'grok', hint: '支持 Grok Imagine，并额外拉取图片模型列表' },
   { id: 'mistral', label: 'Mistral', type: 'openai', baseUrl: 'https://api.mistral.ai', category: 'global', icon: 'mistral' },
   { id: 'groq', label: 'Groq', type: 'openai', baseUrl: 'https://api.groq.com/openai', category: 'global', icon: 'groq' },
   { id: 'together', label: 'Together AI', type: 'openai', baseUrl: 'https://api.together.xyz', category: 'global', icon: 'together' },
@@ -79,7 +79,7 @@ export const CHANNEL_PRESETS: ChannelPreset[] = [
     hint: '接口版本为 /v4，末尾斜杠表示完整 API 前缀',
   },
   { id: 'zai', label: 'Z.ai (GLM 国际版)', type: 'openai', baseUrl: 'https://api.z.ai/api/paas/v4/', category: 'cn', icon: 'zai' },
-  { id: 'doubao', label: '豆包 (火山方舟)', type: 'openai', baseUrl: 'https://ark.cn-beijing.volces.com/api/v3/', category: 'cn', icon: 'doubao', hint: '接口版本为 /api/v3' },
+  { id: 'doubao', label: '豆包 (火山方舟)', type: 'openai', baseUrl: 'https://ark.cn-beijing.volces.com/api/v3/', category: 'cn', icon: 'doubao', hint: '接口版本为 /api/v3；支持 Seedream 图片生成' },
   { id: 'qianfan', label: '百度千帆', type: 'openai', baseUrl: 'https://qianfan.baidubce.com/v2/', category: 'cn', icon: 'qianfan', hint: '接口版本为 /v2' },
   { id: 'hunyuan', label: '腾讯混元', type: 'openai', baseUrl: 'https://api.hunyuan.cloud.tencent.com', category: 'cn', icon: 'hunyuan' },
   { id: 'stepfun', label: '阶跃星辰', type: 'openai', baseUrl: 'https://api.stepfun.com', category: 'cn', icon: 'stepfun' },

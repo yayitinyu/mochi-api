@@ -473,12 +473,12 @@ export function ChannelsPage() {
               autoComplete="new-password"
             />
           </Field>
-          <Field label="支持的模型" hint="用英文逗号分隔；可以从上游获取新模型，或清理现有模型">
+          <Field label="支持的模型" hint="用英文逗号分隔；聊天与图片模型可放在同一渠道，也可以从上游获取或清理">
             <div className="flex flex-col gap-2 sm:flex-row">
               <Input
                 value={form.models}
                 onChange={(e) => setForm({ ...form, models: e.target.value })}
-                placeholder="gpt-4o, gpt-4o-mini"
+                placeholder="gpt-4o, gpt-image-2"
                 required
                 className="flex-1 min-w-0"
               />

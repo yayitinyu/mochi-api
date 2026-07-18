@@ -24,6 +24,7 @@ func SetRelayRouter(r *gin.Engine) {
 	v1.POST("/responses", middleware.TokenAuth(false), func(c *gin.Context) {
 		relay.Handle(c, relay.FormatResponses)
 	})
+	v1.POST("/images/generations", middleware.TokenAuth(false), relay.HandleImageGeneration)
 	v1.POST("/messages", middleware.TokenAuth(true), func(c *gin.Context) {
 		relay.Handle(c, relay.FormatClaude)
 	})

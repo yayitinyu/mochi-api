@@ -61,6 +61,12 @@ func TestUpstreamTargetBaseURLConventions(t *testing.T) {
 			want:   "https://proxy.example.com/api/responses",
 		},
 		{
+			name:   "image generation full prefix",
+			chType: model.ChannelTypeOpenAI, baseURL: "https://ark.example.com/api/v3/",
+			format: FormatImage,
+			want:   "https://ark.example.com/api/v3/images/generations",
+		},
+		{
 			name:   "gemini standard",
 			chType: model.ChannelTypeGemini, baseURL: "https://generativelanguage.googleapis.com",
 			format: FormatGemini,
@@ -159,6 +165,14 @@ func TestModelsURLFromExact(t *testing.T) {
 		modelsURLFromExact("https://x.com/api/messages"))
 	require.Equal(t, "https://x.com/api/models",
 		modelsURLFromExact("https://x.com/api"))
+	require.Equal(t, "https://x.com/v1/models",
+		modelsURLFromExact("https://x.com/v1/images/generations"))
+}
+
+func TestXAIImageModelsURL(t *testing.T) {
+	require.Equal(t, "https://api.x.ai/v1/image-generation-models",
+		xAIImageModelsURL("https://api.x.ai"))
+	require.Equal(t, "", xAIImageModelsURL("https://proxy.example.com"))
 }
 
 func TestRetriableStatus(t *testing.T) {

@@ -28,6 +28,7 @@ const (
 	FormatResponses Format = "responses"
 	FormatClaude    Format = "claude"
 	FormatGemini    Format = "gemini"
+	FormatImage     Format = "image"
 )
 
 const defaultAnthropicVersion = "2023-06-01"
@@ -391,6 +392,8 @@ func upstreamTarget(rc *relayContext) (url, headerKey, headerVal string) {
 		return base + "/v1beta" + leaf, "x-goog-api-key", rc.channel.ApiKey
 	case FormatResponses:
 		return joinUpstreamPath(base, exact, "/v1/responses"), "Authorization", "Bearer " + rc.channel.ApiKey
+	case FormatImage:
+		return joinUpstreamPath(base, exact, "/v1/images/generations"), "Authorization", "Bearer " + rc.channel.ApiKey
 	default:
 		return joinUpstreamPath(base, exact, "/v1/chat/completions"), "Authorization", "Bearer " + rc.channel.ApiKey
 	}
@@ -605,6 +608,9 @@ func upstreamFormatFor(channel *model.Channel, clientFormat Format) Format {
 	case model.ChannelTypeGemini:
 		return FormatGemini
 	default:
+		if clientFormat == FormatImage {
+			return FormatImage
+		}
 		if clientFormat == FormatResponses && channel.UsesNativeResponses() {
 			return FormatResponses
 		}
@@ -711,6 +717,10 @@ func estimateTokens(text string) int {
 // collectPromptText concatenates input text for fallback token estimation.
 func collectPromptText(body []byte) string {
 	var sb strings.Builder
+	prompt := gjson.GetBytes(body, "prompt")
+	if prompt.Type == gjson.String {
+		sb.WriteString(prompt.String())
+	}
 	instructions := gjson.GetBytes(body, "instructions")
 	if instructions.Type == gjson.String {
 		sb.WriteString(instructions.String())
