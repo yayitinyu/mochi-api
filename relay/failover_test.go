@@ -249,6 +249,43 @@ func TestResponsesFallbackKeepsResolvedModel(t *testing.T) {
 	require.Equal(t, "upstream-model", chatModel)
 }
 
+// A mapping turns its alias into a virtual model group, but the alias may also
+// be the real model name on another upstream. Keep that literal model eligible
+// so adding compatibility targets cannot make an existing channel unreachable.
+func TestAliasMappingKeepsLiteralUpstreamModelAvailable(t *testing.T) {
+	setupRelayDB(t)
+
+	var upstreamModel string
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, err := io.ReadAll(r.Body)
+		require.NoError(t, err)
+		upstreamModel = gjson.GetBytes(body, "model").String()
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{
+			"id":"chatcmpl-1","created":1700000000,"model":"gpt-5.6-sol",
+			"choices":[{"message":{"role":"assistant","content":"ok"},"finish_reason":"stop"}],
+			"usage":{"prompt_tokens":1,"completion_tokens":1,"total_tokens":2}
+		}`))
+	}))
+	defer upstream.Close()
+
+	channel := &model.Channel{
+		Name: "literal alias model", Type: model.ChannelTypeOpenAI, BaseURL: upstream.URL,
+		Models: "gpt-5.6-sol", Status: model.StatusEnabled,
+	}
+	require.NoError(t, model.CreateChannel(channel))
+	require.NoError(t, model.CreateModelMapping(&model.ModelMapping{
+		Alias: "gpt-5.6-sol", UpstreamName: "compatible-upstream-model",
+	}))
+	t.Cleanup(func() { markChannelSuccess(channel.Id) })
+
+	recorder := relayRequest(t,
+		`{"model":"gpt-5.6-sol","messages":[{"role":"user","content":"hi"}]}`)
+
+	require.Equal(t, http.StatusOK, recorder.Code, recorder.Body.String())
+	require.Equal(t, "gpt-5.6-sol", upstreamModel)
+}
+
 func TestHandleRejectsOversizedBody(t *testing.T) {
 	setupRelayDB(t)
 

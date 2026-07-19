@@ -53,10 +53,7 @@ func HandleImageGeneration(c *gin.Context) {
 	}
 	rc.stream = gjson.GetBytes(body, "stream").Bool()
 
-	targetModels := []string{rc.modelName}
-	if upstream, ok := model.ResolveAlias(rc.modelName); ok {
-		targetModels = model.ParseModelList(upstream)
-	}
+	targetModels := model.ResolveModelTargets(rc.modelName)
 	channels, err := model.GetEnabledChannelsForModelList(targetModels)
 	if err != nil {
 		writeError(c, FormatImage, http.StatusInternalServerError, "api_error", "数据库错误")

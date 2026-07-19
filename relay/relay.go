@@ -103,12 +103,7 @@ func Handle(c *gin.Context, clientFormat Format) {
 		writeError(c, clientFormat, http.StatusBadRequest, "invalid_request_error", "缺少 model 字段")
 		return
 	}
-	var targetModels []string
-	if upstream, ok := model.ResolveAlias(rc.modelName); ok {
-		targetModels = model.ParseModelList(upstream)
-	} else {
-		targetModels = []string{rc.modelName}
-	}
+	targetModels := model.ResolveModelTargets(rc.modelName)
 	rc.stream = gjson.GetBytes(body, "stream").Bool()
 	rc.clientWantsUsage = clientFormat == FormatOpenAI &&
 		gjson.GetBytes(body, "stream_options.include_usage").Bool()

@@ -46,6 +46,24 @@ func ResolveAlias(name string) (upstream string, isAlias bool) {
 	return up, ok
 }
 
+// ResolveModelTargets returns the upstream models eligible for a requested
+// name. Explicit mapping targets come first, while the literal requested name
+// remains a fallback because an alias may also be a real model on an upstream.
+func ResolveModelTargets(name string) []string {
+	upstream, isAlias := ResolveAlias(name)
+	if !isAlias {
+		return []string{name}
+	}
+
+	targets := ParseModelList(upstream)
+	for _, target := range targets {
+		if target == name {
+			return targets
+		}
+	}
+	return append(targets, name)
+}
+
 // GetAllAliases returns all alias names from the cache.
 func GetAllAliases() []string {
 	mappingMu.RLock()
