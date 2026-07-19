@@ -291,12 +291,12 @@ export function ChannelsPage() {
             <tbody>
               {channels.map((ch) => (
                 <tr key={ch.id} className="border-t border-sakura-50 dark:border-white/5">
-                  <td className="px-6 py-3.5">
+                  <td className="max-w-[16rem] px-6 py-3.5">
                     <div className="flex items-center gap-2">
                       <ChannelIcon icon={ch.icon} type={ch.type} size={18} />
-                      <div className="min-w-0">
-                        <div className="font-bold text-ink">{ch.name}</div>
-                        <div className="text-xs text-ink-soft">{ch.base_url}</div>
+                      <div className="min-w-0 flex-1">
+                        <div className="truncate font-bold text-ink" title={ch.name}>{ch.name}</div>
+                        <div className="truncate text-xs text-ink-soft" title={ch.base_url}>{ch.base_url}</div>
                       </div>
                     </div>
                   </td>
